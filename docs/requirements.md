@@ -1,0 +1,377 @@
+# CV DebugMate Python 需求文档
+
+> 参考项目: [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp)  
+> Python 版 VS Code 调试可视化扩展，在 Python 调试过程中可视化 1/2/3D 数据结构。
+
+---
+
+## 一、核心功能概览
+
+| 功能模块 | C++ 版 | Python 版对应 |
+|---------|--------|--------------|
+| **1D 曲线图** | `std::vector<T>`, `std::array<T,N>`, `T[N]`, `std::set<T>` | `list`, `tuple`, `np.ndarray` (1D), `array.array` |
+| **2D 图像** | `cv::Mat`, `T[H][W]`, `std::array<std::array<T>>` | `np.ndarray` (2D/3D HxW or HxWxC), `PIL.Image`, `torch.Tensor` (2D/3D/4D) |
+| **3D 点云** | `std::vector<cv::Point3f>` | `np.ndarray` (Nx3), `list of (x,y,z)` |
+| **变量面板** | TreeView 自动检测当前作用域变量 | TreeView 自动检测当前作用域变量 |
+| **视图同步** | 配对变量联动缩放/平移 | 配对变量联动缩放/平移 |
+| **自动刷新** | 单步调试自动更新 | 单步调试自动更新 |
+
+---
+
+## 二、支持的数据类型
+
+### 2.1 图像类型（2D Viewer）
+
+| 类型 | 说明 | 备注 |
+|------|------|------|
+| `np.ndarray` shape `(H, W)` | 灰度图 | dtype: uint8/uint16/float32/float64 |
+| `np.ndarray` shape `(H, W, 1)` | 单通道 | 同灰度图 |
+| `np.ndarray` shape `(H, W, 3)` | BGR/RGB 图 | dtype: uint8/float32 |
+| `np.ndarray` shape `(H, W, 4)` | BGRA/RGBA 图 | dtype: uint8/float32 |
+| `PIL.Image.Image` | PIL/Pillow 图像 | 可选支持 |
+| `torch.Tensor` shape `(H, W)` | 灰度图（需 detach/cpu） | 可选支持 |
+| `torch.Tensor` shape `(C, H, W)` 或 `(H, W, C)` | 多通道图（需 detach/cpu） | 可选支持 |
+| `cv2.Mat`（即 `np.ndarray`） | OpenCV 图像 | 同 ndarray |
+
+### 2.2 曲线类型（1D Plot Viewer）
+
+| 类型 | 说明 |
+|------|------|
+| `list` / `tuple` 中元素为数值 | 1D 数据 |
+| `np.ndarray` shape `(N,)` 或 `(1,N)` 或 `(N,1)` | 1D 向量 |
+| `array.array` | Python 标准库数组 |
+| `torch.Tensor` shape `(N,)` | 1D Tensor（可选支持） |
+| `range` | Python range 对象 |
+
+### 2.3 点云类型（3D Point Cloud Viewer）
+
+| 类型 | 说明 |
+|------|------|
+| `np.ndarray` shape `(N, 3)` | XYZ 点云，dtype: float32/float64 |
+| `np.ndarray` shape `(N, 6)` | XYZ + RGB 点云 |
+| `list` of `(x, y, z)` tuple/list | 点云列表 |
+
+---
+
+## 三、功能特性详细需求
+
+### 3.1 变量自动检测面板（Variables Panel）
+
+- 在 VS Code **调试侧边栏** 注册 TreeView，显示当前作用域所有**可视化的变量**
+- 通过 Python 调试器（debugpy）接口，使用 DAP（Debug Adapter Protocol）获取当前帧的变量列表
+- 对每个变量执行类型判断：
+  - 基础检测：通过变量的 `type` 字符串快速分类（不依赖调试器求值，速度快）
+  - 增强检测：通过 `evaluate` 命令获取 `type(var).__name__`、`var.shape`、`var.dtype` 等信息精确分类
+- 变量按类型分组展示（图像组、曲线组、点云组）
+- 支持**手动添加变量**到面板（右键菜单 → "Add to CV DebugMate"）
+- 支持**变量分组**（Add to Group）
+
+### 3.2 2D 图像查看器（Image Viewer）
+
+- 显示图像内容，支持多通道（灰度/RGB/BGR/RGBA）
+- **交互操作**：
+  - 滚轮缩放（最大 100×）
+  - 拖动平移
+  - Reset 按钮重置视图
+- **功能控件**：
+  - 自动归一化（Auto Normalize）：将数据范围映射到 [0, 255]，适用于 float 型数据
+  - 伪彩色映射（Colormap）：可选灰度/热力图/Jet 等
+  - 通道切换（BGR↔RGB，单通道显示等）
+  - 导出：Save PNG / TIFF
+- **悬停信息**：鼠标悬停时显示像素坐标和像素值
+- **图像尺寸信息**：显示 `HxW (C channels, dtype)`
+
+### 3.3 1D 曲线查看器（Plot Viewer）
+
+- 支持折线图（Line）、散点图（Scatter）、直方图（Histogram）3 种模式
+- **自定义 X 轴**：可指定另一个变量作为 X 轴数据
+- **交互操作**：
+  - 框选缩放
+  - 滚轮缩放
+  - 拖动平移
+  - 双击 / Reset 重置视图
+- **导出**：Save PNG / CSV
+- 显示数据统计信息（最小值、最大值、均值、标准差）
+
+### 3.4 3D 点云查看器（Point Cloud Viewer）
+
+- 基于 Three.js 在 Webview 中渲染
+- **交互操作**：
+  - 鼠标拖动旋转
+  - 滚轮缩放
+- **功能控件**：
+  - 按 X/Y/Z 轴着色（颜色映射）
+  - 可调点大小（Point Size）
+  - 导出：Save PLY
+- 支持 XYZ 和 XYZ+RGB 两种格式
+
+### 3.5 视图同步（View Sync）
+
+- 支持将两个变量**配对**，实现可视化联动：
+  - 图像查看器之间：同步缩放和平移
+  - 3D 查看器之间：同步旋转和缩放
+  - 曲线查看器之间：同步缩放和平移范围
+- 在 TreeView 中通过右键菜单配对变量
+
+### 3.6 自动刷新（Auto Refresh）
+
+- 每次调试器**单步执行**（step over / step in / step out / continue 后暂停）时，自动重新获取变量数据并更新所有打开的 Webview
+- 监听 VS Code `onDidReceiveDebugSessionCustomEvent` 或 `onDidChangeActiveDebugSession` 事件
+
+---
+
+## 四、调试器兼容性
+
+Python 调试主要使用 **debugpy**（即 VS Code Python 扩展的默认调试器）。
+
+| 调试器类型 | `debugSession.type` | 说明 |
+|-----------|---------------------|------|
+| debugpy | `"python"` 或 `"debugpy"` | VS Code Python Extension |
+| Jupyter | `"jupyter"` | Jupyter Notebook 调试（可选支持） |
+
+### 数据获取策略
+
+不同于 C++ 版需要手动读取内存，Python 版可以通过 **DAP evaluate 请求**直接执行 Python 表达式获取数据，更加简洁：
+
+```
+// 获取 numpy 数组信息
+evaluate: "import json; import numpy as np; arr = <varname>; json.dumps({'shape': list(arr.shape), 'dtype': str(arr.dtype)})"
+
+// 获取数组数据（小数组）
+evaluate: "<varname>.tolist()"
+
+// 获取数组数据（大数组，Base64编码）
+evaluate: "import base64; import numpy as np; base64.b64encode(<varname>.tobytes()).decode()"
+```
+
+### 大数据传输策略
+
+- **小数据**（< 1MB）：直接通过 `evaluate` → `tolist()` 获取 JSON 数组
+- **大数据**（>= 1MB）：通过 `evaluate` 执行 `numpy.tobytes()` + Base64 编码传输
+- 传输时显示进度提示（与 C++ 版的分块内存读取对应）
+
+---
+
+## 五、项目架构设计
+
+### 5.1 模块划分
+
+```
+src/
+├── extension.ts              # 扩展入口，变量可视化主逻辑
+├── cvVariablesProvider.ts    # TreeView 变量列表提供器
+├── utils/
+│   ├── debugger.ts           # 调试器适配层（DAP 通信，数据获取）
+│   ├── pythonTypes.ts        # Python 类型检测（纯字符串/正则匹配）
+│   ├── panelManager.ts       # Webview 面板管理
+│   └── syncManager.ts        # 变量配对同步管理
+├── matImage/
+│   ├── matProvider.ts        # 2D 图像数据读取（numpy/PIL/tensor）
+│   └── matWebview.ts         # 图像 Webview 渲染（复用 C++ 版 HTML/JS）
+├── plot/
+│   ├── plotProvider.ts       # 1D 数据读取
+│   └── plotWebview.ts        # 曲线图 Webview 渲染
+└── pointCloud/
+    ├── pointCloudProvider.ts # 3D 点云数据读取
+    └── pointCloudWebview.ts  # 点云 Webview 渲染（Three.js）
+```
+
+### 5.2 类型检测架构（对应 C++ 版的两层检测）
+
+**第一层：基础检测（快速，用于 TreeView 列表分类）**
+- 通过变量的 `type` 字符串匹配：`"numpy.ndarray"`, `"PIL.Image"`, `"torch.Tensor"`, `"list"`, `"tuple"` 等
+- 不需要调试器 evaluate，速度快
+
+**第二层：增强检测（精确，用于实际可视化）**
+- 通过 DAP evaluate 执行：
+  - `type(var).__name__` 获取类型名
+  - `var.shape` 获取形状
+  - `var.dtype` 获取数据类型
+  - `len(var)` 获取长度
+- 根据 shape 和 dtype 精确判断图像/曲线/点云
+
+### 5.3 数据读取流程
+
+```
+用户点击变量
+    ↓
+基础类型检测（type 字符串匹配）
+    ↓
+增强类型检测（evaluate shape/dtype）
+    ↓
+判断数据大小
+    ↓
+小数据 → evaluate tolist() → JSON 传输
+大数据 → evaluate tobytes() → Base64 编码传输
+    ↓
+Webview 渲染
+```
+
+---
+
+## 六、使用方式
+
+### 方式 1：CV DebugMate 面板（推荐）
+
+1. 启动 Python 调试会话
+2. 打开 **"运行和调试"** 侧边栏
+3. 找到 **CV DebugMate** 区域
+4. 点击变量名即可查看
+
+### 方式 2：右键菜单
+
+调试过程中，在变量上右键 → **"View by CV DebugMate"**
+
+---
+
+## 七、系统要求
+
+- VS Code 1.93.0+
+- Python 调试器：[Python Extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（内置 debugpy）
+- 被调试的 Python 环境中需要安装相应库（numpy、Pillow、PyTorch 为可选依赖，插件应优雅处理缺失情况）
+
+---
+
+## 八、与 C++ 版的差异说明
+
+| 方面 | C++ 版 | Python 版 |
+|------|--------|-----------|
+| 数据获取方式 | 通过 DAP `readMemory` 直接读取内存 | 通过 DAP `evaluate` 执行 Python 表达式 |
+| 类型检测复杂度 | 高（需区分 LLDB/GDB/MSVC，STL 内部成员名差异） | 低（统一 debugpy，Python 对象有统一接口） |
+| 支持的图像库 | OpenCV cv::Mat 为主 | numpy ndarray 为主，兼容 PIL/PyTorch |
+| 调试器适配 | 需要适配 3 种调试器（LLDB/GDB/MSVC） | 主要适配 debugpy 一种 |
+| 内存读取 | 分块并行内存读取（`readMemory` DAP） | Base64 encoded bytes via evaluate |
+| 指针类型 | 需要解引用指针 | Python 无裸指针，不需要 |
+
+---
+
+## 九、实现优先级（分阶段）
+
+### Phase 1：核心基础（MVP）
+- [x] 基础 VS Code 扩展框架（TypeScript）
+- [x] 接入 debugpy DAP，获取当前帧变量列表
+- [x] 基础类型检测（识别 numpy ndarray）
+- [x] 图像查看器 Webview（显示 numpy 图像）
+- [x] 自动刷新（单步调试时更新）
+
+### Phase 2：完善类型支持
+- [x] 1D 曲线图查看器（list/ndarray 1D）
+- [x] 变量面板 TreeView（自动检测分类）
+- [x] 大数据 Base64 传输支持
+- [x] 导出功能（PNG/CSV/PLY）
+
+### Phase 3：高级功能
+- [x] PIL.Image 支持
+- [x] PyTorch Tensor 支持
+- [x] 3D 点云查看器（Three.js）
+- [x] 视图同步（配对联动）
+- [x] 自定义 X 轴（Plot Viewer）
+- [x] 右键菜单集成
+
+### Phase 4：体验优化
+- [ ] 进度提示（大数据加载时）
+- [x] 图像悬停像素信息
+- [x] 数据统计信息（min/max/mean/std）
+- [x] 伪彩色映射（Colormap）
+- [ ] Jupyter Notebook 调试支持
+
+---
+
+## 十、当前进度备忘（2026-03-12）
+
+### 已完成（代码骨架层面）
+
+#### 配置文件（全部完成）
+- `package.json` — 所有命令 / 视图 / 菜单 / 配置项已声明
+- `tsconfig.json` / `tsconfig.test.json` — `module: commonjs`, `moduleResolution: node`（已从 Node16 修复）
+- `esbuild.js` — watch / production build 脚本
+- `eslint.config.mjs` — TypeScript ESLint 规则
+- `.gitignore`, `.vscodeignore`, `.vscode/launch.json`, `.vscode/tasks.json`
+- `.github/copilot-instructions.md`, `workflows/ci.yml`, issue 模板
+- `README.md` — 参照 C++ 版重写，含类型表、功能表、操作控件表
+
+#### TypeScript 源码（逻辑完整，非占位）
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| `src/extension.ts` | ✅ | 命令注册、DAP 事件监听、可视化分发 |
+| `src/cvVariablesProvider.ts` | ✅ | TreeView 自动检测、分组、手动添加 |
+| `src/utils/debugger.ts` | ✅ | DAP 通信：evaluate / fetchArrayData（JSON + Base64）|
+| `src/utils/pythonTypes.ts` | ✅ | 两层类型检测纯函数 |
+| `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新、sync broadcast |
+| `src/utils/syncManager.ts` | ✅ | idle → waiting → paired 状态机 |
+| `src/matImage/matProvider.ts` | ✅ | ndarray / PIL / Tensor 三条数据获取路径 |
+| `src/matImage/matWebview.ts` | ✅ | 图像 HTML 模板（CSP nonce）|
+| `src/plot/plotProvider.ts` | ✅ | 1D 数据获取（ndarray / tensor / list）|
+| `src/plot/plotWebview.ts` | ✅ | 曲线图 HTML 模板（uPlot）|
+| `src/pointCloud/pointCloudProvider.ts` | ✅ | (N,3)/(N,6) 点云获取 |
+| `src/pointCloud/pointCloudWebview.ts` | ✅ | 点云 HTML 模板（Three.js）|
+
+#### 前端资源 media/（逻辑完整）
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| `image-viewer.js` | ✅ | Canvas 渲染、zoom/pan、colormap、hover 像素值、Save PNG |
+| `plot-viewer.js` | ✅ | uPlot 封装、Line/Scatter/Histogram、Save PNG/CSV |
+| `pointcloud-viewer.js` | ✅ | Three.js 场景、OrbitControls、按轴着色、Save PLY |
+| `colormaps.js` | ✅ | gray / jet / hot / viridis / plasma LUT |
+| `image-viewer.css` / `plot-viewer.css` / `pointcloud-viewer.css` | ✅ | 样式 |
+| `uplot.iife.min.js` | ❌ | **未下载，阻塞 Plot Viewer 运行** |
+| `three.min.js` | ❌ | **未下载，阻塞 Point Cloud Viewer 运行** |
+| `OrbitControls.js` | ❌ | **未下载，阻塞 Point Cloud Viewer 运行** |
+
+#### 测试
+- `src/test/pythonTypes.test.ts` — pythonTypes.ts 纯函数单元测试（已有）
+
+---
+
+### 未完成 / 待处理事项
+
+#### P0（阻塞运行——必须先处理）
+
+1. **下载三个 vendor 前端库**（未下载则 Plot/点云 Viewer 完全无法运行）：
+   ```bash
+   cd media
+   curl -L -o uplot.iife.min.js https://cdn.jsdelivr.net/npm/uplot/dist/uPlot.iife.min.js
+   curl -L -o three.min.js https://cdn.jsdelivr.net/npm/three/build/three.min.js
+   curl -L -o OrbitControls.js "https://cdn.jsdelivr.net/npm/three/examples/js/controls/OrbitControls.js"
+   ```
+
+2. **构建验证**：`npm install && npm run compile` — 确认 TypeScript 编译通过（当前环境缺少 node，尚未验证）
+
+#### P1（发布前必须）
+
+3. **扩展图标** `assets/icon.png` — `package.json` 已引用 `"icon": "assets/icon.png"`，缺少会导致发布警告/错误
+
+4. **Python 测试样例项目** `test_python/` — 类似 C++ 版的 `test_cpp/`，包含各类型变量的脚本，用于 F5 手动验证可视化效果：
+   - 包含 `numpy.ndarray`（灰度图、彩色图、1D、点云）
+   - 包含 `PIL.Image`
+   - 包含 `torch.Tensor`（可选，需要 torch）
+   - `requirements.txt`（numpy, Pillow 等）
+
+#### P2（质量完善）
+
+5. **集成测试** — 当前只有 `pythonTypes.ts` 的纯函数单元测试，缺少：
+   - mock `vscode.DebugSession` 的 DAP 通信测试
+   - 各 Provider 的数据获取逻辑测试
+
+6. **实际端到端验证**：
+   - PIL.Image 数据路径验证（`matProvider.ts` PIL 分支）
+   - PyTorch Tensor 大数组 Base64 传输验证
+   - 超大数组（>1MB）Base64 路径验证
+
+#### P3（体验完善）
+
+7. **进度提示** — 大数据加载时显示 loading 状态（Phase 4 待实现）
+
+8. **Jupyter Notebook 调试支持** — `session.type === "jupyter"` 分支（Phase 4 待实现）
+
+9. **CHANGELOG.md** — 发布所需
+
+---
+
+### 已修复的 Bug 记录
+
+| Bug | 原因 | 修复方式 |
+|-----|------|----------|
+| `session.customRequest(...).catch` 不存在 | VS Code DAP API 返回 `Thenable`，非 `Promise` | 包装为 `Promise.resolve(session.customRequest(...)).catch()` |
+| `Array.from(view as Iterable<number>)` 类型错误 | `DataView` 不可迭代 | 改为 `Array.from(view as unknown as number[])` |
+| 模块找不到（"找不到模块或其相应的类型声明"）| `tsconfig.json` 使用 `module: Node16` | 改为 `module: commonjs`, `moduleResolution: node` |
