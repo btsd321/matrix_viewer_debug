@@ -34,18 +34,20 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 
 | Category | Type | Visualization |
 | -------------------- | --------------------------------------- | --------------- |
-| **Image (2D)** | `numpy.ndarray` shape `(H, W)` | 🖼️ Image Viewer |
-| | `numpy.ndarray` shape `(H, W, 1/3/4)` | 🖼️ Image Viewer |
-| | `PIL.Image.Image` | 🖼️ Image Viewer |
+| **Image (2D)** | `PIL.Image.Image` | 🖼️ Image Viewer |
 | | `torch.Tensor` shape `(H, W)` / `(C, H, W)` / `(1, C, H, W)` | 🖼️ Image Viewer |
+| | `cv2.UMat` / `cv2.cuda.GpuMat` | 🖼️ Image Viewer |
 | **Point Cloud (3D)** | `numpy.ndarray` shape `(N, 3)` — XYZ | 📊 3D Viewer |
 | | `numpy.ndarray` shape `(N, 6)` — XYZ + RGB | 📊 3D Viewer |
-| | `list` of length-3/6 tuples or lists | 📊 3D Viewer |
-| **Plot (1D)** | `numpy.ndarray` shape `(N,)` or `(N, 1)` | 📈 Plot Viewer |
-| | `torch.Tensor` (1D) | 📈 Plot Viewer |
-| | `list` / `tuple` of numeric values | 📈 Plot Viewer |
+| | `open3d.geometry.PointCloud` | 📊 3D Viewer |
+| | `list` / `tuple` of 3-element seqs | 📊 3D Viewer |
+| **Plot (1D/2D)** | `numpy.ndarray` shape `(N,)` | 📈 1D Chart |
+| | `numpy.ndarray` shape `(N, 2)` | 📈 2D Scatter |
+| | `list` / `tuple` of numeric values | 📈 1D Chart |
+| | `list` / `tuple` of 2-element seqs | 📈 2D Scatter |
+| | `torch.Tensor` (1D) | 📈 1D Chart |
 
-> **Supported dtypes**: `uint8`, `uint16`, `int8`, `int16`, `int32`, `int64`, `float16`, `float32`, `float64`, `bool`
+> **Unsupported shapes** (e.g. `ndarray` with shape `(H,W,3)`) will show a "不支持的数据结构" warning.
 
 ---
 

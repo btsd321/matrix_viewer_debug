@@ -24,7 +24,7 @@ export { VisualizableKind } from "../IDebugAdapter";
  * debugpy returns as `type(obj).__name__`.
  */
 const IMAGE_TYPE_PATTERNS = [
-  /numpy\.ndarray|\bndarray\b/i,                        // "numpy.ndarray" or "ndarray"
+  // numpy.ndarray is no longer an image type — it maps to plot/pointcloud/unknown
   /PIL\.(Image|JpegImagePlugin|PngImagePlugin)|\bImageFile\b/i, // full OR short PIL class names
   /torch\.Tensor|\bTensor\b/i,                          // "torch.Tensor" or "Tensor"
   /cv2\.(Mat|UMat|cuda\.GpuMat)|\b(UMat|GpuMat)\b/i,  // cv2 types (UMat/GpuMat distinguish from cv::Mat)
@@ -34,21 +34,32 @@ const PLOT_TYPE_PATTERNS = [
   /^(builtins\.)?tuple$/i,
   /^(builtins\.)?range$/i,
   /array\.array/i,
-  /numpy\.ndarray|\bndarray\b/i,  // Could be 1D — will be refined in Layer 2
+  /numpy\.ndarray|\bndarray\b/i,  // refined in Layer 2 (1D→plot, Nx2→scatter, else pointcloud/unknown)
   /torch\.Tensor|\bTensor\b/i,
 ];
-const POINTCLOUD_TYPE_PATTERNS = [/numpy\.ndarray|\bndarray\b/i]; // Nx3 / Nx6 ndarray
+const POINTCLOUD_TYPE_PATTERNS = [
+  /numpy\.ndarray|\bndarray\b/i,       // Nx3 / Nx6 ndarray — Layer 2 decides
+  /open3d.*PointCloud/i,               // open3d.geometry.PointCloud / open3d.cpu.pybind.geometry.PointCloud
+];
 
 /**
  * Layer-1 basic detection from the DAP `type` string.
  * Returns "unknown" when no pattern matches.
- * ndarray/Tensor may match multiple categories; caller should use Layer 2
- * to refine once shape/dtype are available.
+ * ndarray/Tensor may match multiple categories; Layer 2 refines once shape/dtype are available.
  */
 export function basicTypeDetect(typeStr: string): VisualizableKind {
   for (const pat of IMAGE_TYPE_PATTERNS) {
     if (pat.test(typeStr)) {
-      return "image"; // Will be refined by Layer 2
+      return "image"; // Will be refined by Layer 2 for torch
+    }
+  }
+  // Check pointcloud before plot so open3d.PointCloud short-circuits correctly
+  for (const pat of POINTCLOUD_TYPE_PATTERNS) {
+    if (pat.test(typeStr)) {
+      // numpy also matches PLOT patterns; return "plot" as the TreeView hint
+      // (Layer 2 will promote to pointcloud when shape warrants it)
+      if (/numpy\.ndarray|\bndarray\b/i.test(typeStr)) { break; }
+      return "pointcloud";
     }
   }
   for (const pat of PLOT_TYPE_PATTERNS) {
@@ -67,10 +78,17 @@ export function basicTypeDetect(typeStr: string): VisualizableKind {
  */
 export function detectVisualizableType(info: VariableInfo): VisualizableKind {
   const { typeName = "", shape, dtype, length } = info;
+
+  // ── open3d.geometry.PointCloud ───────────────────────────────────────────
+  if (/open3d.*PointCloud/i.test(typeName)) {
+    return "pointcloud";
+  }
+
   // ── cv2.UMat / cv2.cuda.GpuMat ──────────────────────────────────────────
   if (/cv2\.(UMat|cuda\.GpuMat)/i.test(typeName)) {
     return "image";
   }
+
   // ── numpy.ndarray ────────────────────────────────────────────────────────
   if (/numpy\.ndarray/i.test(typeName)) {
     return classifyNdarray(shape, dtype);
@@ -86,15 +104,24 @@ export function detectVisualizableType(info: VariableInfo): VisualizableKind {
     return "image";
   }
 
-  // ── list / tuple / array.array / range ───────────────────────────────────
-  if (
-    /^builtins\.(list|tuple|range)$/.test(typeName) ||
-    /array\.array/.test(typeName)
-  ) {
+  // ── list / tuple — use shape inferred by getVariableInfo ─────────────────
+  if (/^builtins\.(list|tuple)$/.test(typeName)) {
+    if (shape && shape.length === 2) {
+      const cols = shape[1];
+      if (cols === 2) { return "plot"; }             // list of 2-tuples → 2D scatter
+      if (cols === 3 || cols === 6) { return "pointcloud"; } // list of 3-tuples → 3D pointcloud
+      return "unknown";                              // unsupported inner dimension
+    }
+    if (shape && shape.length === 1) { return "plot"; } // flat 1D list
+    return "plot"; // fallback
+  }
+
+  // ── range / array.array ───────────────────────────────────────────────────
+  if (/^builtins\.range$/.test(typeName) || /array\.array/.test(typeName)) {
     return "plot";
   }
 
-  void length; // used for future list-length checks
+  void length;
   return "unknown";
 }
 
@@ -109,35 +136,25 @@ export function classifyNdarray(
   }
 
   const ndim = shape.length;
-  const lastDim = shape[ndim - 1];
 
-  // 1-D  → plot
+  // 1-D → plot (1D line/scatter chart)
   if (ndim === 1) {
     return "plot";
   }
 
-  // 2-D  → grayscale image (any numeric dtype)
   if (ndim === 2) {
-    return isNumericDtype(dtype) ? "image" : "unknown";
+    const cols = shape[1];
+    // [N, 2]      → 2D scatter plot (xValues + yValues)
+    if (cols === 2) { return "plot"; }
+    // [N, 3|6]    → 3D point cloud (XYZ or XYZ+RGB)
+    if (cols === 3 || cols === 6) { return "pointcloud"; }
+    // All other 2D shapes are unsupported
+    void dtype;
+    return "unknown";
   }
 
-  // 3-D  (H, W, C) where C = 1/3/4  → image
-  //       (N, 3)                     → point cloud
-  //       (N, 6)                     → point cloud with color
-  if (ndim === 3) {
-    if (lastDim === 1 || lastDim === 3 || lastDim === 4) {
-      return "image";
-    }
-    if ((lastDim === 3 || lastDim === 6) && shape[0] > 1) {
-      return "pointcloud";
-    }
-  }
-
-  // 4-D  (1, C, H, W) or (B, C, H, W) — treat as image (first slice)
-  if (ndim === 4 && (lastDim === 1 || shape[1] <= 4)) {
-    return "image";
-  }
-
+  // 3D, 4D, etc. — not supported in this design
+  void dtype;
   return "unknown";
 }
 

@@ -1,96 +1,130 @@
 """
-CV DebugMate Python — Demo Script
-==================================
-Run this script with F5 (launch config: "CV DebugMate: Run demo.py") to
-interactively test every supported variable type.
+Matrix Viewer Debug — Python Demo Script
+==========================================
+Run with F5 (launch config: "CV DebugMate: Run demo.py") to interactively test
+every supported variable type.
 
-Set a breakpoint on the `breakpoint()` call (or anywhere in the BREAKPOINT
-section).  In the "CV DebugMate" panel in the Debug sidebar, click a variable
-to open its viewer.
+Set a breakpoint on the ``breakpoint()`` call.  In the "Matrix Viewer" panel in
+the Debug sidebar, click any variable below to open its viewer.
 
-Supported types exercised here:
-  Image (2D)   : grayscale_u8, grayscale_f32, bgr_u8, rgba_u8, pil_image,
-                 small_float_img
-  Plot (1D)    : signal_1d, noise_1d, my_list, my_tuple
-  Point Cloud  : cloud_xyz, cloud_xyzrgb
+Visualisation rules (as of current implementation):
+  numpy.ndarray
+    shape (N,)      → 1D line/scatter chart
+    shape (N, 2)    → 2D scatter chart  (col-0 = X, col-1 = Y)
+    shape (N, 3/6)  → 3D point cloud   (XYZ or XYZ+RGB)
+    any other shape → ⚠ unsupported data structure
+
+  cv2 explicit types (UMat, cuda.GpuMat) → 2D image viewer
+  PIL.Image                               → 2D image viewer
+
+  list / tuple of scalars               → 1D chart
+  list / tuple of 2-element sequences   → 2D scatter chart
+  list / tuple of 3-element sequences   → 3D point cloud
+
+  open3d.geometry.PointCloud            → 3D point cloud
 """
 
 import os
 import numpy as np
 from PIL import Image
+import open3d as o3d
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEST_IMG_PATH = os.path.join(SCRIPT_DIR, "..", "..", "assets", "test_img.png")
 
-# ── 2D Image: numpy ndarray ────────────────────────────────────────────────────
-
-# Load the test image (2048 × 2048 RGBA) and derive several variants
-_pil_src = Image.open(TEST_IMG_PATH)
-_np_rgba = np.array(_pil_src, dtype=np.uint8)              # (2048, 2048, 4)
-
-# Grayscale uint8  (H, W)
-grayscale_u8 = _np_rgba[:, :, 0].copy()
-
-# Grayscale float32  (H, W)  values in [0, 1]
-grayscale_f32 = _np_rgba[:, :, 0].astype(np.float32) / 255.0
-
-# BGR uint8  (H, W, 3)  — OpenCV convention
-bgr_u8 = _np_rgba[:, :, 2::-1].copy()   # flip R↔B, drop alpha
-
-# RGBA uint8  (H, W, 4)
-rgba_u8 = _np_rgba.copy()
-
-# Small float image  (64, 64)  range outside [0, 255]  → needs Auto-Normalize
 rng = np.random.default_rng(42)
-small_float_img = rng.standard_normal((64, 64)).astype(np.float32) * 100
 
-# ── 2D Image: PIL.Image ────────────────────────────────────────────────────────
-
-pil_image = _pil_src.copy()              # PIL RGBA image (2048 × 2048)
-pil_gray  = _pil_src.convert("L")       # PIL grayscale  (2048 × 2048)
-
-# ── 2D Image: single-channel ndarray (H, W, 1) ────────────────────────────────
-single_ch = _np_rgba[:, :, :1].copy()   # (2048, 2048, 1)
-
-# ── 1D Plot: numpy ndarray ─────────────────────────────────────────────────────
+# =============================================================================
+# 1-D numpy array  →  1D line/scatter chart
+# =============================================================================
 N = 512
 t = np.linspace(0, 4 * np.pi, N)
-signal_1d  = (np.sin(t) + 0.5 * np.sin(3 * t)).astype(np.float32)   # clean sine
-noise_1d   = rng.standard_normal(N).astype(np.float32)               # white noise
-ramp_1d    = np.arange(N, dtype=np.float64)                          # linear ramp
+signal_1d = (np.sin(t) + 0.5 * np.sin(3 * t)).astype(np.float32)   # clean sine
+noise_1d  = rng.standard_normal(N).astype(np.float32)               # white noise
+ramp_1d   = np.arange(N, dtype=np.float64)                          # linear ramp
 
-# ── 1D Plot: Python builtins ───────────────────────────────────────────────────
-my_list  = [float(v) for v in signal_1d[:64]]
-my_tuple = tuple(range(32))
+# =============================================================================
+# (N, 2) numpy array  →  2D scatter chart  (X col + Y col)
+# =============================================================================
+angle = np.linspace(0, 2 * np.pi, 300)
+scatter_circle = np.column_stack([np.cos(angle), np.sin(angle)]).astype(np.float32)   # (300, 2)
 
-# ── 3D Point Cloud ─────────────────────────────────────────────────────────────
+scatter_line = np.column_stack([
+    np.linspace(0, 10, 200),
+    np.linspace(0, 10, 200) + rng.standard_normal(200) * 0.5,
+]).astype(np.float32)   # (200, 2)
 
-# XYZ only — random sphere surface
-M = 4096
+# =============================================================================
+# (N, 3) numpy array  →  3D point cloud (XYZ)
+# =============================================================================
+M = 2048
 phi   = rng.uniform(0, np.pi, M)
 theta = rng.uniform(0, 2 * np.pi, M)
 cloud_xyz = np.column_stack([
     np.sin(phi) * np.cos(theta),
     np.sin(phi) * np.sin(theta),
     np.cos(phi),
-]).astype(np.float32)   # (4096, 3)
+]).astype(np.float32)   # (2048, 3)
 
-# XYZ + RGB — colour by elevation (Z)
-z_norm = (cloud_xyz[:, 2] + 1.0) / 2.0          # normalise to [0, 1]
+# =============================================================================
+# (N, 6) numpy array  →  3D point cloud (XYZ + RGB)
+# =============================================================================
+z_norm = (cloud_xyz[:, 2] + 1.0) / 2.0   # normalise Z to [0, 1]
 cloud_xyzrgb = np.column_stack([
     cloud_xyz,
     z_norm,               # R
     1.0 - z_norm,         # G
     np.full(M, 0.5),      # B
-]).astype(np.float32)   # (4096, 6)
+]).astype(np.float32)   # (2048, 6)
 
-# ── Intentionally small arrays for edge-case testing ──────────────────────────
-tiny_img  = np.zeros((4, 4, 3), dtype=np.uint8)    # 4×4 BGR — minimal image
-tiny_1d   = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-tiny_cloud = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+# =============================================================================
+# PIL.Image  →  2D image viewer
+# =============================================================================
+_pil_src  = Image.open(TEST_IMG_PATH)
+pil_image = _pil_src.copy()       # RGBA (2048 × 2048)
+pil_gray  = _pil_src.convert("L") # grayscale (2048 × 2048)
 
-# ── BREAKPOINT — open "CV DebugMate" panel and click any variable above ────────
+# =============================================================================
+# Python built-in list/tuple  →  1D chart or 2D scatter
+# =============================================================================
+# 1D: list of floats
+my_list_1d  = [float(v) for v in signal_1d[:64]]          # 64 numbers → 1D chart
+my_tuple_1d = tuple(range(32))                             # 32 integers → 1D chart
+
+# 2D: list of 2-tuples  →  2D scatter chart
+my_list_2d = [(float(np.cos(a)), float(np.sin(a)))
+              for a in np.linspace(0, 2 * np.pi, 60)]     # 60 × (x, y)
+
+# 3D: list of 3-tuples  →  3D point cloud
+my_list_3d = [(float(x), float(y), float(z))
+              for x, y, z in cloud_xyz[:50]]               # 50 × (x, y, z)
+
+# =============================================================================
+# open3d.geometry.PointCloud  →  3D point cloud viewer
+# =============================================================================
+pcd_xyz = o3d.geometry.PointCloud()
+pcd_xyz.points = o3d.utility.Vector3dVector(cloud_xyz.astype(np.float64))   # XYZ only
+
+pcd_color = o3d.geometry.PointCloud()
+pcd_color.points = o3d.utility.Vector3dVector(cloud_xyz.astype(np.float64))
+pcd_color.colors = o3d.utility.Vector3dVector(
+    np.column_stack([z_norm, 1.0 - z_norm, np.full(M, 0.5)]).astype(np.float64)
+)  # XYZ + RGB
+
+# =============================================================================
+# Edge-case / unsupported examples (should trigger warning)
+# =============================================================================
+# These shapes are not supported and will show "不支持的数据结构":
+#   tiny_img = np.zeros((4, 4, 3), dtype=np.uint8)   # (4,4,3) → unsupported for numpy
+#   big_mat  = np.eye(10)                             # (10,10) ndim=2 cols=10 → unsupported
+
+tiny_1d    = np.array([1.0, 2.0, 3.0], dtype=np.float32)              # (3,)  → 1D chart
+tiny_2d    = np.array([[1, 2], [2, 3], [3, 4]], dtype=np.float32)     # (3,2) → 2D scatter
+tiny_cloud = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)  # (3,3) → 3D cloud
+
+# ── BREAKPOINT — open the Matrix Viewer panel and click any variable above ─────
 breakpoint()   # <-- set debugger stop here
 
 print("Done.")
+

@@ -11,8 +11,8 @@ Inspired by [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp).
 | Feature | Description |
 |---------|-------------|
 | **Variables Panel** | TreeView in the Debug sidebar that auto-detects visualizable variables (numpy arrays, PIL images, lists, etc.) in the current scope |
-| **Image Viewer** | Renders 2D arrays / PIL images on a canvas; supports zoom, pan, colormap, normalize, hover pixel info, save PNG |
-| **Plot Viewer** | 1D line/scatter/histogram chart using uPlot; supports zoom/pan, custom X axis, stats, save PNG/CSV |
+| **Image Viewer** | Renders PIL images / cv2 explicit types on a canvas; supports zoom, pan, colormap, normalize, hover pixel info, save PNG |
+| **Plot Viewer** | 1D line/scatter chart or 2D scatter chart (when xValues provided) using uPlot; supports zoom/pan, stats, save PNG/CSV |
 | **Point Cloud Viewer** | 3D point cloud with Three.js + OrbitControls; colour-by-axis, adjustable point size, save PLY |
 | **View Sync** | Pair two open panels so their viewport (zoom/pan/rotation) stays in sync |
 | **Auto Refresh** | All open panels refresh automatically when the debugger steps to a new line |
@@ -38,8 +38,8 @@ src/
 │   │   ├── pythonAdapter.ts  # Implements IDebugAdapter, delegates to coordinators above
 │   │   └── libs/             # Per-library provider implementations
 │   │       ├── utils.ts      # Shared helpers (fetchArrayData wrappers, etc.)
-│   │       ├── numpy/        # numpy.ndarray (+ cv2.Mat) support
-│   │       │   ├── imageProvider.ts
+│   │       ├── numpy/        # numpy.ndarray support (1D plot, Nx2 scatter, Nx3/Nx6 pointcloud)
+│   │       │   ├── imageProvider.ts    # (kept for reference; not registered in image coordinator)
 │   │       │   ├── plotProvider.ts
 │   │       │   └── pointCloudProvider.ts
 │   │       ├── pil/          # PIL.Image support
@@ -47,6 +47,8 @@ src/
 │   │       ├── torch/        # torch.Tensor support
 │   │       │   ├── imageProvider.ts
 │   │       │   └── plotProvider.ts
+│   │       ├── open3d/       # open3d.geometry.PointCloud support
+│   │       │   └── pointCloudProvider.ts
 │   │       └── builtins/     # Python built-in types (list, tuple, range)
 │   │           ├── plotProvider.ts
 │   │           └── pointCloudProvider.ts

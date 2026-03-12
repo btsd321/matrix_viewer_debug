@@ -34,18 +34,20 @@
 
 | 类别 | 类型 | 可视化方式 |
 | -------------------- | --------------------------------------- | --------------- |
-| **图像（2D）** | `numpy.ndarray` shape `(H, W)` | 🖼️ 图像查看器 |
-| | `numpy.ndarray` shape `(H, W, 1/3/4)` | 🖼️ 图像查看器 |
-| | `PIL.Image.Image` | 🖼️ 图像查看器 |
+| **图像（2D）** | `PIL.Image.Image` | 🖼️ 图像查看器 |
 | | `torch.Tensor` shape `(H, W)` / `(C, H, W)` / `(1, C, H, W)` | 🖼️ 图像查看器 |
+| | `cv2.UMat` / `cv2.cuda.GpuMat` | 🖼️ 图像查看器 |
 | **点云（3D）** | `numpy.ndarray` shape `(N, 3)` — XYZ | 📊 3D 查看器 |
 | | `numpy.ndarray` shape `(N, 6)` — XYZ + RGB | 📊 3D 查看器 |
-| | 元素为长度 3/6 的 `list` 或 `tuple` | 📊 3D 查看器 |
-| **曲线（1D）** | `numpy.ndarray` shape `(N,)` 或 `(N, 1)` | 📈 曲线查看器 |
-| | `torch.Tensor`（1D）| 📈 曲线查看器 |
-| | 元素为数值的 `list` / `tuple` | 📈 曲线查看器 |
+| | `open3d.geometry.PointCloud` | 📊 3D 查看器 |
+| | 元素为 3 元素的 `list` / `tuple` | 📊 3D 查看器 |
+| **曲线（1D/2D）** | `numpy.ndarray` shape `(N,)` | 📈 1D 折线图 |
+| | `numpy.ndarray` shape `(N, 2)` | 📈 2D 散点图 |
+| | 元素为数值的 `list` / `tuple` | 📈 1D 折线图 |
+| | 元素为 2 元素序列的 `list` / `tuple` | 📈 2D 散点图 |
+| | `torch.Tensor`（1D）| 📈 1D 折线图 |
 
-> **支持的数据类型**：`uint8`、`uint16`、`int8`、`int16`、`int32`、`int64`、`float16`、`float32`、`float64`、`bool`
+> **不支持的维度**（如 `ndarray` shape `(H,W,3)`）会弹出「不支持的数据结构」警告。
 
 ---
 

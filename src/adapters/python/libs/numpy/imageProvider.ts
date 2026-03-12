@@ -57,7 +57,11 @@ export class NumpyImageProvider implements ILibImageProvider {
 /** Infer channel order from the type name and variable name. */
 function detectNumpyFormat(typeName: string, varName: string, channels: number): ImageFormat {
   if (channels === 1) { return "GRAY"; }
-  const isBGR = /cv2\./i.test(typeName) || /\bbgr\b/i.test(varName);
+  // Split on common separators (_  -  .  space) and check for a "bgr" component.
+  // Using component split avoids the JS \b trap: \b treats '_' as a word char,
+  // so \bbgr\b would NOT match "bgr_u8" — the split approach handles this correctly.
+  const hasComponentBGR = varName.toLowerCase().split(/[_\-. ]/).includes("bgr");
+  const isBGR = /cv2\./i.test(typeName) || hasComponentBGR;
   if (channels === 4) { return isBGR ? "BGRA" : "RGBA"; }
   return isBGR ? "BGR" : "RGB";
 }

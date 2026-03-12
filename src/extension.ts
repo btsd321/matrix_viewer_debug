@@ -229,6 +229,10 @@ async function visualizeVariable(
           debugOut.appendLine(`[DEBUG] fetchImageData result: ${data ? "OK" : "null"}`); // [DEBUG]
           if (data) {
             panelManager.openImagePanel(varName, data, context, syncManager);
+          } else {
+            vscode.window.showWarningMessage(
+              `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
+            );
           }
           break;
         }
@@ -237,6 +241,10 @@ async function visualizeVariable(
           debugOut.appendLine(`[DEBUG] fetchPlotData result: ${data ? "OK" : "null"}`); // [DEBUG]
           if (data) {
             panelManager.openPlotPanel(varName, data, context, syncManager);
+          } else {
+            vscode.window.showWarningMessage(
+              `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
+            );
           }
           break;
         }
@@ -249,6 +257,10 @@ async function visualizeVariable(
               data,
               context,
               syncManager
+            );
+          } else {
+            vscode.window.showWarningMessage(
+              `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
             );
           }
           break;

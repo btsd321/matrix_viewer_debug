@@ -45,7 +45,7 @@ export function buildImageWebviewHtml(
   <div id="toolbar">
     <span id="info-label"></span>
     <label>Normalize <input type="checkbox" id="chk-normalize" ${!data.isUint8 ? "checked" : ""}></label>
-    <label>Colormap
+    <label ${data.channels > 1 ? "hidden" : ""}>Colormap
       <select id="sel-colormap">
         <option value="gray">Gray</option>
         <option value="jet">Jet</option>

@@ -11,8 +11,9 @@
 | 功能模块 | C++ 版 | Python 版对应 |
 |---------|--------|--------------|
 | **1D 曲线图** | `std::vector<T>`, `std::array<T,N>`, `T[N]`, `std::set<T>` | `list`, `tuple`, `np.ndarray` (1D), `array.array` |
-| **2D 图像** | `cv::Mat`, `T[H][W]`, `std::array<std::array<T>>` | `np.ndarray` (2D/3D HxW or HxWxC), `PIL.Image`, `torch.Tensor` (2D/3D/4D) |
-| **3D 点云** | `std::vector<cv::Point3f>` | `np.ndarray` (Nx3), `list of (x,y,z)` |
+| **2D 散点图** | — | `np.ndarray` (N,2), `list` of 2-tuples |
+| **2D 图像** | `cv::Mat`, `T[H][W]`, `std::array<std::array<T>>` | `PIL.Image`, `torch.Tensor` (2D/3D/4D), `cv2.UMat`/`GpuMat` |
+| **3D 点云** | `std::vector<cv::Point3f>` | `np.ndarray` (N,3/6), `list` of 3-tuples, `open3d.geometry.PointCloud` |
 | **变量面板** | TreeView 自动检测当前作用域变量 | TreeView 自动检测当前作用域变量 |
 | **视图同步** | 配对变量联动缩放/平移 | 配对变量联动缩放/平移 |
 | **自动刷新** | 单步调试自动更新 | 单步调试自动更新 |
@@ -25,32 +26,35 @@
 
 | 类型 | 说明 | 备注 |
 |------|------|------|
-| `np.ndarray` shape `(H, W)` | 灰度图 | dtype: uint8/uint16/float32/float64 |
-| `np.ndarray` shape `(H, W, 1)` | 单通道 | 同灰度图 |
-| `np.ndarray` shape `(H, W, 3)` | BGR/RGB 图 | dtype: uint8/float32 |
-| `np.ndarray` shape `(H, W, 4)` | BGRA/RGBA 图 | dtype: uint8/float32 |
-| `PIL.Image.Image` | PIL/Pillow 图像 | 可选支持 |
-| `torch.Tensor` shape `(H, W)` | 灰度图（需 detach/cpu） | 可选支持 |
-| `torch.Tensor` shape `(C, H, W)` 或 `(H, W, C)` | 多通道图（需 detach/cpu） | 可选支持 |
-| `cv2.Mat`（即 `np.ndarray`） | OpenCV 图像 | 同 ndarray |
+| `PIL.Image.Image` | PIL/Pillow 图像 | 已实现 |
+| `torch.Tensor` shape `(H, W)` | 灰度图（需 detach/cpu） | 已实现 |
+| `torch.Tensor` shape `(C, H, W)` 或 `(H, W, C)` | 多通道图（需 detach/cpu） | 已实现 |
+| `cv2.UMat` | OpenCV UMat（CPU 透明 API） | 已实现 |
+| `cv2.cuda.GpuMat` | OpenCV GPU 矩阵 | 已实现 |
 
-### 2.2 曲线类型（1D Plot Viewer）
+> **注意**：`numpy.ndarray` 不再作为图像类型直接可视化。  
+> 如需将 numpy 图像数据可视化，请使用 `PIL.Image.fromarray()` 或 `cv2.UMat()` 包装。
 
-| 类型 | 说明 |
-|------|------|
-| `list` / `tuple` 中元素为数值 | 1D 数据 |
-| `np.ndarray` shape `(N,)` 或 `(1,N)` 或 `(N,1)` | 1D 向量 |
-| `array.array` | Python 标准库数组 |
-| `torch.Tensor` shape `(N,)` | 1D Tensor（可选支持） |
-| `range` | Python range 对象 |
+### 2.2 曲线类型（1D/2D Plot Viewer）
+
+| 类型 | 可视化模式 | 说明 |
+|------|----------|------|
+| `np.ndarray` shape `(N,)` | 1D 折线图 | 已实现 |
+| `np.ndarray` shape `(N, 2)` | 2D 散点图 (col-0=X, col-1=Y) | 已实现 |
+| `list` / `tuple` of scalars | 1D 折线图 | 已实现 |
+| `list` / `tuple` of 2-element seqs | 2D 散点图 | 已实现 |
+| `array.array` | 1D 折线图 | 已实现 |
+| `torch.Tensor` shape `(N,)` | 1D 折线图 | 已实现 |
+| `range` | 1D 折线图 | 已实现 |
 
 ### 2.3 点云类型（3D Point Cloud Viewer）
 
-| 类型 | 说明 |
-|------|------|
-| `np.ndarray` shape `(N, 3)` | XYZ 点云，dtype: float32/float64 |
-| `np.ndarray` shape `(N, 6)` | XYZ + RGB 点云 |
-| `list` of `(x, y, z)` tuple/list | 点云列表 |
+| 类型 | 说明 | 状态 |
+|------|------|------|
+| `np.ndarray` shape `(N, 3)` | XYZ 点云，dtype: float32/float64 | 已实现 |
+| `np.ndarray` shape `(N, 6)` | XYZ + RGB 点云 | 已实现 |
+| `list` / `tuple` of 3-element seqs | 点云列表 | 已实现 |
+| `open3d.geometry.PointCloud` | open3d 点云（含可选颜色） | 已实现 |
 
 ---
 

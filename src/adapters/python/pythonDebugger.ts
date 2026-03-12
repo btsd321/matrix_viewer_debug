@@ -139,10 +139,15 @@ export async function getVariableInfo(
   varName: string,
   frameId?: number
 ): Promise<VariableInfo | null> {
+  // For list/tuple, infer inner element dimension so Layer-2 detection can
+  // distinguish 1D list vs list-of-2-tuples (scatter) vs list-of-3-tuples (pointcloud).
   const expr =
     `__import__('json').dumps({` +
     `'typeName': type(${varName}).__module__ + '.' + type(${varName}).__name__,` +
-    `'shape': list(${varName}.shape) if hasattr(${varName}, 'shape') else None,` +
+    `'shape': list(${varName}.shape) if hasattr(${varName}, 'shape') else ` +
+      `([len(${varName}), len(${varName}[0])] ` +
+        `if isinstance(${varName}, (list, tuple)) and len(${varName}) > 0 and hasattr(${varName}[0], '__len__') ` +
+        `else ([len(${varName})] if isinstance(${varName}, (list, tuple)) else None)),` +
     `'dtype': str(${varName}.dtype) if hasattr(${varName}, 'dtype') else None,` +
     `'length': len(${varName}) if hasattr(${varName}, '__len__') else None` +
     `})`;
