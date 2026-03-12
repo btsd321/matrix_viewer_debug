@@ -22,7 +22,7 @@ const IMAGE_TYPE_PATTERNS = [
   /numpy\.ndarray/i,
   /PIL\.(Image|JpegImagePlugin|PngImagePlugin)/i,
   /torch\.Tensor/i,
-  /cv2\.Mat/i,
+  /cv2\.(Mat|UMat|cuda\.GpuMat)/i,
 ];
 const PLOT_TYPE_PATTERNS = [
   /^list$/i,
@@ -62,7 +62,10 @@ export function basicTypeDetect(typeStr: string): VisualizableKind {
  */
 export function detectVisualizableType(info: VariableInfo): VisualizableKind {
   const { typeName = "", shape, dtype, length } = info;
-
+  // ── cv2.UMat / cv2.cuda.GpuMat ──────────────────────────────────────────
+  if (/cv2\.(UMat|cuda\.GpuMat)/i.test(typeName)) {
+    return "image";
+  }
   // ── numpy.ndarray ────────────────────────────────────────────────────────
   if (/numpy\.ndarray/i.test(typeName)) {
     return classifyNdarray(shape, dtype);

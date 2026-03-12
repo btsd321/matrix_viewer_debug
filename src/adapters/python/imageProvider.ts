@@ -10,7 +10,8 @@
  * Current registry (checked in order):
  *   1. PIL.Image      → libs/pil/imageProvider
  *   2. torch.Tensor   → libs/torch/imageProvider
- *   3. numpy.ndarray  → libs/numpy/imageProvider  (default / fallback)
+ *   3. cv2.UMat / GpuMat → libs/opencv/imageProvider
+ *   4. numpy.ndarray  → libs/numpy/imageProvider  (default / fallback)
  */
 
 import * as vscode from "vscode";
@@ -19,14 +20,16 @@ import { ImageData } from "../../viewers/viewerTypes";
 import { ILibImageProvider } from "../ILibProviders";
 import { PilImageProvider } from "./libs/pil/imageProvider";
 import { TorchImageProvider } from "./libs/torch/imageProvider";
+import { OpenCvImageProvider } from "./libs/opencv/imageProvider";
 import { NumpyImageProvider } from "./libs/numpy/imageProvider";
 
-// ── Registry ───────────────────────────────────────────────────────────────
+// ── Registry ────────────────────────────────────────────────────────────
 // Checked in order; the first provider whose canHandle() returns true is used.
 
 const LIB_IMAGE_PROVIDERS: ILibImageProvider[] = [
   new PilImageProvider(),
   new TorchImageProvider(),
+  new OpenCvImageProvider(),  // cv2.UMat / cv2.cuda.GpuMat
   new NumpyImageProvider(),   // must be last — acts as the ndarray fallback
 ];
 
