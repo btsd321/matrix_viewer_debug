@@ -145,15 +145,20 @@ export async function evaluateExpression(
   const resolvedFrame = frameId ?? (await getCurrentFrameId(session));
   const context = getEvaluateContext(session);
 
-  return Promise.race([
-    session
-      .customRequest("evaluate", {
+  const inner = async (): Promise<string | null> => {
+    try {
+      const r = await session.customRequest("evaluate", {
         expression,
         frameId: resolvedFrame,
         context,
-      })
-      .then((r) => r?.result ?? null)
-      .catch(() => null),
+      });
+      return r?.result ?? null;
+    } catch {
+      return null;
+    }
+  };
+  return Promise.race([
+    inner(),
     new Promise<null>((resolve) =>
       setTimeout(() => resolve(null), EVALUATE_TIMEOUT_MS)
     ),
@@ -373,4 +378,87 @@ export async function getVectorDataPointer(
 
   const expressions = buildDataPointerExpressions(session, varName);
   return tryGetDataPointer(session, expressions, frameId);
+}
+
+// ── Container size ────────────────────────────────────────────────────────
+
+/**
+ * Evaluate `.size()` on a container variable, trying cast variants appropriate
+ * for each debugger type. Returns 0 if the evaluation fails or returns
+ * a non-positive / implausibly large value (> 1 billion).
+ */
+export async function getContainerSize(
+  session: vscode.DebugSession,
+  varName: string,
+  frameId?: number
+): Promise<number> {
+  const exprs = isUsingLLDB(session)
+    ? [`${varName}.size()`, `(long long)${varName}.size()`]
+    : [`(int)${varName}.size()`, `${varName}.size()`, `(long long)${varName}.size()`];
+  for (const expr of exprs) {
+    const res = await evaluateExpression(session, expr, frameId);
+    const n = parseInt(res ?? "");
+    if (!isNaN(n) && n >= 0 && n < 1_000_000_000) {
+      return n;
+    }
+  }
+  return 0;
+}
+
+// ── Multi-dimensional data-pointer helpers ────────────────────────────────
+
+/**
+ * Build debugger-specific expressions to obtain the address of `varName[0][0]`.
+ * Suitable for 2D C-style arrays and nested std::array types.
+ */
+export function build2DDataPointerExpressions(
+  session: vscode.DebugSession,
+  varName: string
+): string[] {
+  if (isUsingLLDB(session)) {
+    return [
+      `&${varName}[0][0]`,
+      `${varName}[0].data()`,
+      `reinterpret_cast<long long>(&${varName}[0][0])`,
+    ];
+  } else if (isUsingMSVC(session)) {
+    return [
+      `(long long)&${varName}[0][0]`,
+      `(long long)${varName}[0].data()`,
+      `reinterpret_cast<long long>(&${varName}[0][0])`,
+    ];
+  } else {
+    // cppdbg / GDB
+    return [
+      `(long long)&${varName}[0][0]`,
+      `(long long)${varName}[0].data()`,
+      `reinterpret_cast<long long>(&${varName}[0][0])`,
+    ];
+  }
+}
+
+/**
+ * Build debugger-specific expressions to obtain the address of `varName[0][0][0]`.
+ * Suitable for 3D C-style arrays and triply-nested std::array types.
+ */
+export function build3DDataPointerExpressions(
+  session: vscode.DebugSession,
+  varName: string
+): string[] {
+  if (isUsingLLDB(session)) {
+    return [
+      `&${varName}[0][0][0]`,
+      `reinterpret_cast<long long>(&${varName}[0][0][0])`,
+    ];
+  } else if (isUsingMSVC(session)) {
+    return [
+      `(long long)&${varName}[0][0][0]`,
+      `reinterpret_cast<long long>(&${varName}[0][0][0])`,
+    ];
+  } else {
+    return [
+      `(long long)&${varName}[0][0][0]`,
+      `reinterpret_cast<long long>(&${varName}[0][0][0])`,
+    ];
+  }
 }

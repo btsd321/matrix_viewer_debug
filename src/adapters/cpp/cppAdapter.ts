@@ -18,6 +18,10 @@ import * as vscode from "vscode";
 import { IDebugAdapter, VariableInfo, VisualizableKind } from "../IDebugAdapter";
 import { ImageData, PlotData, PointCloudData } from "../../viewers/viewerTypes";
 import { basicTypeDetect } from "./cppTypes";
+import { getVariablesInScope } from "./cppDebugger";
+import { fetchCppImageData } from "./imageProvider";
+import { fetchCppPlotData } from "./plotProvider";
+import { fetchCppPointCloudData } from "./pointCloudProvider";
 
 export class CppAdapter implements IDebugAdapter {
   isSupportedSession(session: vscode.DebugSession): boolean {
@@ -31,12 +35,9 @@ export class CppAdapter implements IDebugAdapter {
   // ── Variable enumeration ──────────────────────────────────────────────
 
   async getVariablesInScope(
-    _session: vscode.DebugSession
+    session: vscode.DebugSession
   ): Promise<VariableInfo[]> {
-    // TODO: enumerate local variables from the C++ debug frame.
-    // Use the same DAP threads/stackTrace/scopes/variables requests as Python,
-    // but the `type` strings will be C++ type names instead of Python ones.
-    return [];
+    return getVariablesInScope(session);
   }
 
   async getVariableInfo(
@@ -44,14 +45,9 @@ export class CppAdapter implements IDebugAdapter {
     varName: string,
     frameId?: number
   ): Promise<VariableInfo | null> {
-    // TODO: inspect the C++ variable to determine shape and dtype.
-    // Strategy options:
-    //   A) DAP "evaluate" with a helper expression (if the debugger supports it)
-    //   B) Read `rows`, `cols`, `type()` fields from `cv::Mat` via children
-    //   C) Read template parameters for Eigen types from the type string
-    void varName;
-    void frameId;
-    return null;
+    // Returns a minimal VariableInfo; providers extract shape/dtype internally.
+    // Full shape resolution (rows, cols, dtype) is deferred to each lib provider.
+    return { name: varName, type: "", frameId };
   }
 
   // ── Type detection ────────────────────────────────────────────────────
@@ -61,39 +57,32 @@ export class CppAdapter implements IDebugAdapter {
   }
 
   detectVisualizableType(info: VariableInfo): VisualizableKind {
-    // TODO: use shape + dtype once getVariableInfo is implemented.
-    // For now, fall back to coarse Layer-1 detection.
     return basicTypeDetect(info.typeName ?? info.type);
   }
 
   // ── Data fetching ─────────────────────────────────────────────────────
 
   async fetchImageData(
-    _session: vscode.DebugSession,
-    _varName: string,
-    _info: VariableInfo
+    session: vscode.DebugSession,
+    varName: string,
+    info: VariableInfo
   ): Promise<ImageData | null> {
-    // TODO: implement for cv::Mat and Eigen 2D matrices.
-    // For cv::Mat: read .data pointer, rows, cols, channels, depth via DAP.
-    // For Eigen: read .data(), .rows(), .cols() via evaluate expressions.
-    return null;
+    return fetchCppImageData(session, varName, info);
   }
 
   async fetchPlotData(
-    _session: vscode.DebugSession,
-    _varName: string,
-    _info: VariableInfo
+    session: vscode.DebugSession,
+    varName: string,
+    info: VariableInfo
   ): Promise<PlotData | null> {
-    // TODO: implement for std::vector<double/float> and Eigen vectors.
-    return null;
+    return fetchCppPlotData(session, varName, info);
   }
 
   async fetchPointCloudData(
-    _session: vscode.DebugSession,
-    _varName: string,
-    _info: VariableInfo
+    session: vscode.DebugSession,
+    varName: string,
+    info: VariableInfo
   ): Promise<PointCloudData | null> {
-    // TODO: implement for pcl::PointCloud and Eigen::MatrixXf (N×3).
-    return null;
+    return fetchCppPointCloudData(session, varName, info);
   }
 }

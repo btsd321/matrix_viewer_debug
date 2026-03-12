@@ -50,16 +50,27 @@ src/
 │   │       └── builtins/     # Python built-in types (list, tuple, range)
 │   │           ├── plotProvider.ts
 │   │           └── pointCloudProvider.ts
-│   └── cpp/                  # C++ / cppdbg / lldb adapter (skeleton, TODO)
-│       ├── cppTypes.ts       # Layer-1 type detection (cv::Mat, Eigen, std::vector, pcl)
-│       ├── cppAdapter.ts     # Implements IDebugAdapter stub
-│       └── libs/             # Per-library provider skeletons
-│           ├── opencv/       # cv::Mat (TODO)
-│           │   └── imageProvider.ts
+│   └── cpp/                  # C++ / cppdbg / lldb adapter
+│       ├── cppTypes.ts       # Layer-1 type detection (cv::Mat, Eigen, std::vector, pcl, C-arrays)
+│       ├── cppDebugger.ts    # DAP communication (evaluate, readMemory, getVariablesInScope, etc.)
+│       ├── cppAdapter.ts     # Implements IDebugAdapter, delegates to coordinators
+│       ├── imageProvider.ts  # Coordinator: delegates to first matching ILibImageProvider
+│       ├── plotProvider.ts   # Coordinator: delegates to first matching ILibPlotProvider
+│       ├── pointCloudProvider.ts # Coordinator: delegates to first matching ILibPointCloudProvider
+│       └── libs/             # Per-library provider implementations
+│           ├── utils.ts      # Shared helpers (buffer, dtype, stats)
+│           ├── opencv/       # cv::Mat support
+│           │   ├── imageProvider.ts
+│           │   └── matUtils.ts
 │           ├── eigen/        # Eigen::Matrix (TODO)
 │           │   └── plotProvider.ts
-│           └── pcl/          # pcl::PointCloud (TODO)
-│               └── pointCloudProvider.ts
+│           ├── pcl/          # pcl::PointCloud (TODO)
+│           │   └── pointCloudProvider.ts
+│           └── std/          # C++ standard library types
+│               ├── stdUtils.ts          # Pure type-detection (std::vector, std::array, C-style arrays, Point3)
+│               ├── plotProvider.ts      # std::vector<T>, std::array<T,N>, T[N] → PlotData
+│               ├── imageProvider.ts     # 2D/3D std::array, T[H][W], T[H][W][C] → ImageData
+│               └── pointCloudProvider.ts # std::vector<Point3f/d>, std::array<Point3f/d,N> → PointCloudData
 ├── viewers/
 │   └── viewerTypes.ts        # Language-agnostic display data contracts (ImageData, PlotData, PointCloudData)
 ├── utils/
@@ -188,10 +199,13 @@ Is the function used by more than one libName/ folder?
 | `cvDepthToDtype`, `cppTypeToCvDepth` | `libs/utils.ts` |
 | `MatInfo`, `getMatInfoFromVariables`, `getMatInfoFromEvaluate` | `libs/opencv/matUtils.ts` |
 | `OpenCvImageProvider` (implements `ILibImageProvider`) | `libs/opencv/imageProvider.ts` |
+| `isBasicNumericType`, `is1DVector`, `is2DStdArray`, `isPoint3Vector` | `libs/std/stdUtils.ts` |
+| `StdPlotProvider`, `StdImageProvider`, `StdPointCloudProvider` | `libs/std/*Provider.ts` |
 | `EigenInfo`, `getEigenDataPointer` | `libs/eigen/eigenUtils.ts` |
 | `EigenPlotProvider` | `libs/eigen/plotProvider.ts` |
 | `PclPointCloudProvider` | `libs/pcl/pointCloudProvider.ts` |
-| `isValidMemoryReference`, `readMemoryChunked`, `getCurrentFrameId` | `cppDebugger.ts` |
+| `isValidMemoryReference`, `readMemoryChunked`, `getCurrentFrameId`, `getContainerSize` | `cppDebugger.ts` |
+| `build2DDataPointerExpressions`, `build3DDataPointerExpressions` | `cppDebugger.ts` |
 
 ### Front-end JS (media/)
 

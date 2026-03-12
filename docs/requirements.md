@@ -316,11 +316,14 @@ Webview 渲染
 - [ ] Jupyter Notebook 调试支持
 
 ### Phase 5：C++ 适配器
-- [ ] `cppAdapter.ts` 实现 `getVariablesInScope`
-- [ ] `cv::Mat` 图像数据获取
-- [ ] `Eigen::Matrix` 图像 / 曲线数据获取
-- [ ] `std::vector<T>` 曲线数据获取
-- [ ] `pcl::PointCloud` 点云数据获取
+- [x] `cppAdapter.ts` 实现 `getVariablesInScope` / `fetchImageData` / `fetchPlotData` / `fetchPointCloudData`
+- [x] `cppDebugger.ts` 实现 `getContainerSize` / `build2DDataPointerExpressions` / `build3DDataPointerExpressions`
+- [x] `cv::Mat` 图像数据获取（通过 `libs/opencv/imageProvider.ts`）
+- [x] `std::vector<T>` / `std::array<T,N>` / `T[N]` 曲线数据获取（通过 `libs/std/plotProvider.ts`）
+- [x] 2D/3D `std::array` 和 C-style array 图像数据获取（通过 `libs/std/imageProvider.ts`）
+- [x] `std::vector<cv::Point3f/d>` / `std::array<cv::Point3f/d,N>` 点云数据获取（通过 `libs/std/pointCloudProvider.ts`）
+- [ ] `Eigen::Matrix` 图像 / 曲线数据获取（`libs/eigen/plotProvider.ts` 待实现）
+- [ ] `pcl::PointCloud` 点云数据获取（`libs/pcl/pointCloudProvider.ts` 待实现）
 
 ---
 
@@ -360,11 +363,21 @@ Webview 渲染
 | `src/adapters/python/libs/torch/plotProvider.ts` | ✅ | torch.Tensor 1D 曲线获取 |
 | `src/adapters/python/libs/builtins/plotProvider.ts` | ✅ | list / tuple / range 曲线获取 |
 | `src/adapters/python/libs/builtins/pointCloudProvider.ts` | ✅ | list of (x,y,z) 点云获取 |
-| `src/adapters/cpp/cppTypes.ts` | ✅ | Layer-1 C++ 类型检测骨架 |
-| `src/adapters/cpp/cppAdapter.ts` | ✅ | IDebugAdapter 实现骨架（分发器待实现）|
-| `src/adapters/cpp/libs/opencv/imageProvider.ts` | ✅ | cv::Mat 骨架（TODO）|
-| `src/adapters/cpp/libs/eigen/plotProvider.ts` | ✅ | Eigen::Matrix 骨架（TODO）|
-| `src/adapters/cpp/libs/pcl/pointCloudProvider.ts` | ✅ | pcl::PointCloud 骨架（TODO）|
+| `src/adapters/cpp/cppTypes.ts` | ✅ | Layer-1 C++ 类型检测（cv::Mat / Eigen / std::vector / std::array / C-style array / Point3 向量 / pcl）|
+| `src/adapters/cpp/cppDebugger.ts` | ✅ | DAP 通信：evaluate / readMemoryChunked / getContainerSize / build2D/3DDataPointerExpressions |
+| `src/adapters/cpp/cppAdapter.ts` | ✅ | 实现 IDebugAdapter，委托给三个协调器 |
+| `src/adapters/cpp/imageProvider.ts` | ✅ | 图像分发器（OpenCvImageProvider + StdImageProvider）|
+| `src/adapters/cpp/plotProvider.ts` | ✅ | 曲线分发器（EigenPlotProvider + StdPlotProvider）|
+| `src/adapters/cpp/pointCloudProvider.ts` | ✅ | 点云分发器（PclPointCloudProvider + StdPointCloudProvider）|
+| `src/adapters/cpp/libs/utils.ts` | ✅ | 跨库公用辅助函数 |
+| `src/adapters/cpp/libs/opencv/imageProvider.ts` | ✅ | cv::Mat 图像获取（LLDB + cppdbg 双路径）|
+| `src/adapters/cpp/libs/opencv/matUtils.ts` | ✅ | MatInfo 类型及 getMatInfoFromVariables / getMatInfoFromEvaluate |
+| `src/adapters/cpp/libs/std/stdUtils.ts` | ✅ | STL / C-style array / Point3 纯函数类型检测 |
+| `src/adapters/cpp/libs/std/plotProvider.ts` | ✅ | std::vector / std::array / T[N] 1D 曲线获取 |
+| `src/adapters/cpp/libs/std/imageProvider.ts` | ✅ | 2D/3D std::array 和 C-style array 图像获取 |
+| `src/adapters/cpp/libs/std/pointCloudProvider.ts` | ✅ | std::vector / std::array of cv::Point3f/d 点云获取 |
+| `src/adapters/cpp/libs/eigen/plotProvider.ts` | 🔲 TODO | Eigen::Matrix 骨架（fetchPlotData 返回 null）|
+| `src/adapters/cpp/libs/pcl/pointCloudProvider.ts` | 🔲 TODO | pcl::PointCloud 骨架（fetchPointCloudData 返回 null）|
 | `src/viewers/viewerTypes.ts` | ✅ | 语言无关统一展示数据类型 |
 | `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新、sync broadcast（使用 IDebugAdapter）|
 | `src/utils/syncManager.ts` | ✅ | idle → waiting → paired 状态机 |
