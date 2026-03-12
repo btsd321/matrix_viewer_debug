@@ -132,6 +132,67 @@ media/                        # Static front-end assets (served by webviews)
 - `*Webview.ts` → HTML string generation only; no data fetching.
 - `panelManager.ts` → panel lifecycle + refresh via `IDebugAdapter`; no language-specific code.
 
+### libs/ internal file placement rules
+
+Every file inside `adapters/<lang>/libs/` must obey the following placement rules.
+**Violating these rules is a bug — fix it before committing.**
+
+#### `adapters/<lang>/libs/utils.ts` — cross-library shared utilities only
+
+Put a function here **only if** it is used by two or more different `<libName>/` folders.
+Allowed content:
+- Buffer conversion helpers (`typedViewOf`, `bufferToBase64`, `typedBufferToNumbers`)
+- Generic stats helpers (`computeMinMax`, `computeStats`, `computeBounds`)
+- Shape helpers (`resolveHWC`)
+- Dtype / depth conversion that is not tied to a specific library (`cvDepthToDtype`, `cppTypeToCvDepth`)
+
+**Forbidden** in `libs/utils.ts`:
+- Any type-detection logic specific to one library (e.g. `isMat`, `isPoint3Vector`)
+- Any DAP communication (`session.customRequest`, `evaluateExpression`, etc.)
+- Any function that only serves one `<libName>/` folder
+
+#### `adapters/<lang>/libs/<libName>/` — library-specific code only
+
+Every file inside a named library folder (`opencv/`, `numpy/`, `pil/`, `torch/`, `eigen/`, `pcl/`, `stl/`, etc.) must contain **only** code that is exclusive to that library.
+
+| File | Allowed content |
+|------|-----------------|
+| `<libName>/imageProvider.ts` | `ILibImageProvider` implementation for this library only |
+| `<libName>/plotProvider.ts` | `ILibPlotProvider` implementation for this library only |
+| `<libName>/pointCloudProvider.ts` | `ILibPointCloudProvider` implementation for this library only |
+| `<libName>/matUtils.ts` (or similar) | Helper types, interfaces, and functions **exclusive** to this library (e.g. `MatInfo`, `getMatInfoFromVariables` for OpenCV; `EigenInfo` for Eigen) |
+
+**Forbidden** in a `<libName>/` file:
+- Functions that are reusable across multiple libraries (move them to `libs/utils.ts`)
+- DAP communication helpers that are not library-specific (move them to `<lang>Debugger.ts`)
+
+#### Decision guide: where does this function belong?
+
+```
+Is the function used by more than one libName/ folder?
+  YES → libs/utils.ts
+  NO  →
+    Is it DAP communication (customRequest, evaluate, readMemory)?
+      YES →
+        Is it specific to one library's data format (e.g. cv::Mat field layout)?
+          YES → libs/<libName>/matUtils.ts (or equivalent)
+          NO  → <lang>Debugger.ts
+      NO  → libs/<libName>/ (whichever file matches its ILib* role)
+```
+
+#### Concrete examples (C++ adapter)
+
+| Function / Type | Correct location |
+|-----------------|-----------------|
+| `getBytesPerElement`, `bufferToBase64`, `computeStats` | `libs/utils.ts` |
+| `cvDepthToDtype`, `cppTypeToCvDepth` | `libs/utils.ts` |
+| `MatInfo`, `getMatInfoFromVariables`, `getMatInfoFromEvaluate` | `libs/opencv/matUtils.ts` |
+| `OpenCvImageProvider` (implements `ILibImageProvider`) | `libs/opencv/imageProvider.ts` |
+| `EigenInfo`, `getEigenDataPointer` | `libs/eigen/eigenUtils.ts` |
+| `EigenPlotProvider` | `libs/eigen/plotProvider.ts` |
+| `PclPointCloudProvider` | `libs/pcl/pointCloudProvider.ts` |
+| `isValidMemoryReference`, `readMemoryChunked`, `getCurrentFrameId` | `cppDebugger.ts` |
+
 ### Front-end JS (media/)
 
 - Vanilla JS, no TypeScript, no bundler — files are served directly.

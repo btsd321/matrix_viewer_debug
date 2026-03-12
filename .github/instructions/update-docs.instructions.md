@@ -29,6 +29,7 @@ applyTo: "**"
 - 修改了目录结构（移动文件、重命名模块、新建子目录）
 - 修改了构建/测试流程（`package.json` scripts、`esbuild.js`、`tsconfig.json`）
 - 修改了 WebView 控件或前端功能（`media/`、`*Webview.ts`）
+- 修改了 `libs/` 内部文件放置规则（`libs/utils.ts` 与 `libs/<libName>/` 的职责边界）
 
 ---
 
@@ -42,6 +43,7 @@ applyTo: "**"
 - `Key design patterns` 中的注意事项
 - `Common Tasks for Copilot` 各子章节（添加新库、新语言等的步骤说明）
 - `Tech Stack` 表格
+- `libs/ internal file placement rules` 中的示例表格与决策树（当 `libs/` 下有文件移动或新增时）
 
 ### 3. 检查 `README.md`
 - `Features` / `Supported Types` 表格

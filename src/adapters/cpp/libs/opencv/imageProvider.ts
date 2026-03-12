@@ -1,36 +1,86 @@
 /**
  * opencv/imageProvider.ts — ImageData extraction from cv::Mat (C++ / cppdbg).
  *
- * TODO: Implement using DAP readMemory + variable child inspection to read
- *       cv::Mat internal fields: rows, cols, type(), data pointer.
+ * Supported types:
+ *   cv::Mat, cv::Mat_<T>, cv::UMat  — any depth (CV_8U … CV_64F), 1–4 channels
  *
- * Supported types (planned):
- *   - CV_8UC1  → (H,W,1) uint8 grayscale
- *   - CV_8UC3  → (H,W,3) uint8 BGR
- *   - CV_8UC4  → (H,W,4) uint8 BGRA
- *   - CV_32FC1 → (H,W,1) float32
- *   - CV_32FC3 → (H,W,3) float32
+ * Data-fetch strategy:
+ *   1. LLDB / variablesReference available → walk children via getMatInfoFromVariables
+ *   2. cppdbg / cppvsdbg fallback → evaluate .rows/.cols/.flags/.data expressions
+ *   3. Read raw pixel bytes via DAP readMemory (chunked, auto-sized)
  *
  * References:
  *   - cv::Mat layout: https://docs.opencv.org/4.x/d3/d63/classcv_1_1Mat.html
+ *   - cv_debug_mate_cpp matProvider.ts
  */
 
 import * as vscode from "vscode";
 import { VariableInfo } from "../../../IDebugAdapter";
 import { ImageData } from "../../../../viewers/viewerTypes";
 import { ILibImageProvider } from "../../../ILibProviders";
+import {
+  isUsingLLDB,
+  readMemoryChunked,
+} from "../../cppDebugger";
+import { getBytesPerElement, cvDepthToDtype } from "./matUtils";
+import { bufferToBase64, computeMinMax } from "../utils";
+import { getMatInfoFromVariables, getMatInfoFromEvaluate } from "./matUtils";
 
 export class OpenCvImageProvider implements ILibImageProvider {
   canHandle(typeName: string): boolean {
-    return /cv::(Mat|UMat|cuda::GpuMat)/i.test(typeName);
+    // cv::Mat, cv::Mat_<T>, cv::UMat — but NOT cv::Matx (handled separately)
+    return /cv::(Mat[^x]|Mat$|UMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
   }
 
   async fetchImageData(
-    _session: vscode.DebugSession,
-    _varName: string,
-    _info: VariableInfo
+    session: vscode.DebugSession,
+    varName: string,
+    info: VariableInfo
   ): Promise<ImageData | null> {
-    // TODO: read cv::Mat.rows, cols, type(), data via DAP readMemory
-    return null;
+    // ── Step 1: Resolve cv::Mat metadata ─────────────────────────────────
+    let matInfo = null;
+
+    // For LLDB (and any debugger with variablesReference), walk children
+    if (info.variablesReference && info.variablesReference > 0) {
+      matInfo = await getMatInfoFromVariables(session, info.variablesReference);
+    }
+
+    // Fallback: evaluate expression-based member access
+    if (!matInfo) {
+      matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+    }
+
+    if (!matInfo) {
+      return null;
+    }
+
+    const { rows, cols, channels, depth, dataPtr } = matInfo;
+    if (rows <= 0 || cols <= 0) {
+      return null;
+    }
+
+    // ── Step 2: Read pixel bytes via readMemory ───────────────────────────
+    const bytesPerElement = getBytesPerElement(depth);
+    const totalBytes = rows * cols * channels * bytesPerElement;
+
+    const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+    if (!buffer) {
+      return null;
+    }
+
+    const dtype = cvDepthToDtype(depth);
+    const { dataMin, dataMax } = computeMinMax(buffer, dtype);
+
+    return {
+      b64Bytes: bufferToBase64(buffer),
+      width: cols,
+      height: rows,
+      channels,
+      dtype,
+      isUint8: depth === 0, // CV_8U
+      dataMin,
+      dataMax,
+      varName,
+    };
   }
 }
