@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "CV DebugMate: Run demo.py",
+      "name": "Matrix Viewer: Run demo.py",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/demo.py",

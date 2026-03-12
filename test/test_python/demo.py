@@ -21,7 +21,7 @@ from PIL import Image
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEST_IMG_PATH = os.path.join(SCRIPT_DIR, "..", "assets", "test_img.png")
+TEST_IMG_PATH = os.path.join(SCRIPT_DIR, "..", "..", "assets", "test_img.png")
 
 # ── 2D Image: numpy ndarray ────────────────────────────────────────────────────
 
