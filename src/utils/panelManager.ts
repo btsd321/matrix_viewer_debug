@@ -9,17 +9,11 @@
 
 import * as vscode from "vscode";
 import { SyncManager } from "./syncManager";
-import { ImageData } from "../matImage/matProvider";
-import { PlotData } from "../plot/plotProvider";
-import { PointCloudData } from "../pointCloud/pointCloudProvider";
+import { ImageData, PlotData, PointCloudData } from "../viewers/viewerTypes";
 import { buildImageWebviewHtml } from "../matImage/matWebview";
 import { buildPlotWebviewHtml } from "../plot/plotWebview";
 import { buildPointCloudWebviewHtml } from "../pointCloud/pointCloudWebview";
-import { fetchArrayData, getVariableInfo } from "./debugger";
-import { detectVisualizableType } from "./pythonTypes";
-import { ImageProvider } from "../matImage/matProvider";
-import { PlotProvider } from "../plot/plotProvider";
-import { PointCloudProvider } from "../pointCloud/pointCloudProvider";
+import { getAdapter } from "../adapters/adapterRegistry";
 
 type PanelKind = "image" | "plot" | "pointcloud";
 
@@ -107,31 +101,33 @@ export class PanelManager {
     session: vscode.DebugSession
   ): Promise<void> {
     try {
-      const info = await getVariableInfo(session, entry.varName);
+      const adapter = getAdapter(session);
+      if (!adapter) {
+        return;
+      }
+
+      const info = await adapter.getVariableInfo(session, entry.varName);
       if (!info) {
         return;
       }
 
       switch (entry.kind) {
         case "image": {
-          const provider = new ImageProvider(session);
-          const data = await provider.fetchImageData(entry.varName, info);
+          const data = await adapter.fetchImageData(session, entry.varName, info);
           if (data) {
             entry.panel.webview.postMessage({ type: "update", data });
           }
           break;
         }
         case "plot": {
-          const provider = new PlotProvider(session);
-          const data = await provider.fetchPlotData(entry.varName, info);
+          const data = await adapter.fetchPlotData(session, entry.varName, info);
           if (data) {
             entry.panel.webview.postMessage({ type: "update", data });
           }
           break;
         }
         case "pointcloud": {
-          const provider = new PointCloudProvider(session);
-          const data = await provider.fetchPointCloudData(entry.varName, info);
+          const data = await adapter.fetchPointCloudData(session, entry.varName, info);
           if (data) {
             entry.panel.webview.postMessage({ type: "update", data });
           }

@@ -12,7 +12,7 @@
  */
 
 import * as vscode from "vscode";
-import { PointCloudData } from "./pointCloudProvider";
+import { PointCloudData } from "../viewers/viewerTypes";
 
 export function buildPointCloudWebviewHtml(
   varName: string,

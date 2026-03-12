@@ -6,19 +6,15 @@
  */
 
 import * as vscode from "vscode";
-import { CvVariablesProvider, CvVariableItem } from "./cvVariablesProvider";
+import { MvVariablesProvider, MvVariableItem } from "./mvVariablesProvider";
 import { PanelManager } from "./utils/panelManager";
 import { SyncManager } from "./utils/syncManager";
-import { getVariablesInScope, getVariableInfo } from "./utils/debugger";
-import { detectVisualizableType } from "./utils/pythonTypes";
-import { ImageProvider } from "./matImage/matProvider";
-import { PlotProvider } from "./plot/plotProvider";
-import { PointCloudProvider } from "./pointCloud/pointCloudProvider";
+import { getAdapter } from "./adapters/adapterRegistry";
 
 export function activate(context: vscode.ExtensionContext) {
   const panelManager = new PanelManager(context);
   const syncManager = new SyncManager();
-  const variablesProvider = new CvVariablesProvider(context, panelManager);
+  const variablesProvider = new MvVariablesProvider(context, panelManager);
 
   // Register the TreeView in the Debug sidebar
   const treeView = vscode.window.createTreeView("matrixViewerPanel", {
@@ -32,7 +28,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "matrixViewer.viewVariable",
-      async (item: CvVariableItem | string) => {
+      async (item: MvVariableItem | string) => {
         const varName =
           typeof item === "string" ? item : item?.variableName ?? "";
         if (!varName) {
@@ -63,7 +59,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "matrixViewer.removeFromPanel",
-      (item: CvVariableItem) => {
+      (item: MvVariableItem) => {
         if (item?.variableName) {
           variablesProvider.removeVariable(item.variableName);
         }
@@ -80,7 +76,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "matrixViewer.syncPair",
-      async (item: CvVariableItem) => {
+      async (item: MvVariableItem) => {
         const existing = syncManager.getPendingPair();
         if (!existing) {
           syncManager.startPairing(item.variableName);
@@ -100,7 +96,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "matrixViewer.addToGroup",
-      async (item: CvVariableItem) => {
+      async (item: MvVariableItem) => {
         const groupName = await vscode.window.showInputBox({
           prompt: "Enter group name",
           placeHolder: "e.g. input/output",
@@ -160,9 +156,17 @@ async function visualizeVariable(
     return;
   }
 
-  let varInfo: Awaited<ReturnType<typeof getVariableInfo>>;
+  const adapter = getAdapter(session);
+  if (!adapter) {
+    vscode.window.showWarningMessage(
+      `MatrixViewer: Unsupported debug session type "${session.type}".`
+    );
+    return;
+  }
+
+  let varInfo: Awaited<ReturnType<typeof adapter.getVariableInfo>>;
   try {
-    varInfo = await getVariableInfo(session, varName);
+    varInfo = await adapter.getVariableInfo(session, varName);
   } catch (e) {
     vscode.window.showErrorMessage(
       `MatrixViewer: Failed to inspect "${varName}": ${e}`
@@ -177,7 +181,7 @@ async function visualizeVariable(
     return;
   }
 
-  const vizType = detectVisualizableType(varInfo);
+  const vizType = adapter.detectVisualizableType(varInfo);
 
   await vscode.window.withProgress(
     {
@@ -188,24 +192,21 @@ async function visualizeVariable(
     async () => {
       switch (vizType) {
         case "image": {
-          const provider = new ImageProvider(session);
-          const data = await provider.fetchImageData(varName, varInfo!);
+          const data = await adapter.fetchImageData(session, varName, varInfo!);
           if (data) {
             panelManager.openImagePanel(varName, data, context, syncManager);
           }
           break;
         }
         case "plot": {
-          const provider = new PlotProvider(session);
-          const data = await provider.fetchPlotData(varName, varInfo!);
+          const data = await adapter.fetchPlotData(session, varName, varInfo!);
           if (data) {
             panelManager.openPlotPanel(varName, data, context, syncManager);
           }
           break;
         }
         case "pointcloud": {
-          const provider = new PointCloudProvider(session);
-          const data = await provider.fetchPointCloudData(varName, varInfo!);
+          const data = await adapter.fetchPointCloudData(session, varName, varInfo!);
           if (data) {
             panelManager.openPointCloudPanel(
               varName,

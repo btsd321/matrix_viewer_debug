@@ -1,8 +1,8 @@
-# CV DebugMate Python — GitHub Copilot Instructions
+# Matrix Viewer Debug — GitHub Copilot Instructions
 
 ## Project Overview
 
-**CV DebugMate Python** is a Visual Studio Code extension (TypeScript) that visualizes 1D/2D/3D Python data structures during a debugpy (Python) debug session.
+**Matrix Viewer Debug** is a Visual Studio Code extension (TypeScript) that visualizes 1D/2D/3D data structures during a debug session.
 
 Inspired by [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp).
 
@@ -24,20 +24,52 @@ Inspired by [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp).
 ```
 src/
 ├── extension.ts              # Entry point: command registration, debug events, visualization dispatch
-├── cvVariablesProvider.ts    # TreeDataProvider for the Debug sidebar panel
+├── mvVariablesProvider.ts    # TreeDataProvider for the Debug sidebar panel
+├── adapters/                 # Language adapter layer
+│   ├── IDebugAdapter.ts      # Shared interface: VariableInfo, VisualizableKind, IDebugAdapter
+│   ├── ILibProviders.ts      # Per-library interfaces: ILibImageProvider, ILibPlotProvider, ILibPointCloudProvider
+│   ├── adapterRegistry.ts    # Maps session.type → IDebugAdapter (first-match-wins)
+│   ├── python/               # Python / debugpy / Jupyter adapter
+│   │   ├── pythonDebugger.ts # DAP communication (evaluate, fetchArrayData, getVariablesInScope)
+│   │   ├── pythonTypes.ts    # Pure type-detection functions (Layer 1 + Layer 2)
+│   │   ├── imageProvider.ts  # Coordinator: delegates to first matching ILibImageProvider
+│   │   ├── plotProvider.ts   # Coordinator: delegates to first matching ILibPlotProvider
+│   │   ├── pointCloudProvider.ts # Coordinator: delegates to first matching ILibPointCloudProvider
+│   │   ├── pythonAdapter.ts  # Implements IDebugAdapter, delegates to coordinators above
+│   │   └── libs/             # Per-library provider implementations
+│   │       ├── utils.ts      # Shared helpers (fetchArrayData wrappers, etc.)
+│   │       ├── numpy/        # numpy.ndarray (+ cv2.Mat) support
+│   │       │   ├── imageProvider.ts
+│   │       │   ├── plotProvider.ts
+│   │       │   └── pointCloudProvider.ts
+│   │       ├── pil/          # PIL.Image support
+│   │       │   └── imageProvider.ts
+│   │       ├── torch/        # torch.Tensor support
+│   │       │   ├── imageProvider.ts
+│   │       │   └── plotProvider.ts
+│   │       └── builtins/     # Python built-in types (list, tuple, range)
+│   │           ├── plotProvider.ts
+│   │           └── pointCloudProvider.ts
+│   └── cpp/                  # C++ / cppdbg / lldb adapter (skeleton, TODO)
+│       ├── cppTypes.ts       # Layer-1 type detection (cv::Mat, Eigen, std::vector, pcl)
+│       ├── cppAdapter.ts     # Implements IDebugAdapter stub
+│       └── libs/             # Per-library provider skeletons
+│           ├── opencv/       # cv::Mat (TODO)
+│           │   └── imageProvider.ts
+│           ├── eigen/        # Eigen::Matrix (TODO)
+│           │   └── plotProvider.ts
+│           └── pcl/          # pcl::PointCloud (TODO)
+│               └── pointCloudProvider.ts
+├── viewers/
+│   └── viewerTypes.ts        # Language-agnostic display data contracts (ImageData, PlotData, PointCloudData)
 ├── utils/
-│   ├── debugger.ts           # DAP communication (evaluate expressions, fetch array data)
-│   ├── pythonTypes.ts        # Pure type-detection functions (no side effects)
-│   ├── panelManager.ts       # Webview panel lifecycle and refresh
+│   ├── panelManager.ts       # Webview panel lifecycle and refresh (uses IDebugAdapter)
 │   └── syncManager.ts        # View sync pair state machine
 ├── matImage/
-│   ├── matProvider.ts        # Fetch image data from debugpy (ndarray / PIL / Tensor)
 │   └── matWebview.ts         # Build HTML for the image viewer webview
 ├── plot/
-│   ├── plotProvider.ts       # Fetch 1D data
 │   └── plotWebview.ts        # Build HTML for the plot viewer webview
 └── pointCloud/
-    ├── pointCloudProvider.ts # Fetch point cloud data
     └── pointCloudWebview.ts  # Build HTML for the point cloud viewer webview
 
 media/                        # Static front-end assets (served by webviews)
@@ -52,8 +84,11 @@ media/                        # Static front-end assets (served by webviews)
 
 ### Key design patterns
 
-- **Two-layer type detection** — `basicTypeDetect()` (fast string match) in the TreeView, `detectVisualizableType()` (shape + dtype) for visualization.
-- **DAP evaluate for everything** — All Python data is fetched via `debugSession.customRequest("evaluate", …)`. No memory reads. Small arrays → JSON (`tolist()`), large arrays → Base64 (`tobytes()`).
+- **Adapter pattern** — `IDebugAdapter` is the single interface the extension core depends on. Python (`PythonAdapter`) and C++ (`CppAdapter`) are separate implementations registered in `adapterRegistry.ts`. Adding a new language means implementing `IDebugAdapter` and adding one line to the registry.
+- **Per-library provider pattern** — Each language adapter has a `libs/` subdirectory. Each third-party library (numpy, PIL, torch, opencv, eigen, pcl, open3d, …) implements one or more of `ILibImageProvider` / `ILibPlotProvider` / `ILibPointCloudProvider` from `adapters/ILibProviders.ts`. The coordinator files (`imageProvider.ts`, `plotProvider.ts`, `pointCloudProvider.ts`) iterate a `LIB_*_PROVIDERS` list and delegate to the first whose `canHandle()` returns true. **Adding a new library requires only creating one file in `libs/<libName>/` and appending it to the coordinator's list — no other files need changing.**
+- **Language-agnostic viewer types** — `viewers/viewerTypes.ts` defines `ImageData`, `PlotData`, `PointCloudData`. All webview builders and `PanelManager` only depend on these types, never on language- or library-specific code.
+- **Two-layer type detection** — `basicTypeDetect()` (fast string match) in the TreeView, `detectVisualizableType()` (shape + dtype) for visualization. Each adapter implements both layers independently.
+- **DAP evaluate for Python** — All Python data is fetched via `debugSession.customRequest("evaluate", …)`. No memory reads. Small arrays → JSON (`tolist()`), large arrays → Base64 (`tobytes()`).
 - **Webview CSP** — Every webview sets a strict Content-Security-Policy with a per-load nonce.
 - **One panel per variable** — `PanelManager` deduplicates: clicking a variable that already has an open panel just focuses it.
 
@@ -67,7 +102,7 @@ media/                        # Static front-end assets (served by webviews)
 | Build | esbuild (bundle), tsc (type-check) |
 | Webview UI | Vanilla JS + Canvas API (image), uPlot (plot), Three.js (point cloud) |
 | Debug protocol | DAP via `vscode.DebugSession.customRequest` |
-| Target debugger | debugpy (`session.type === "python"` or `"debugpy"`) |
+| Target debugger | Any language via `IDebugAdapter` — Python/debugpy built-in, C++ skeleton available |
 
 ---
 
@@ -86,11 +121,16 @@ media/                        # Static front-end assets (served by webviews)
 
 ### Module responsibilities (do not mix)
 
-- `pythonTypes.ts` → **pure functions only**, no VS Code API, no `async`.
-- `debugger.ts` → all DAP communication; no UI, no panel management.
-- `*Provider.ts` → data fetching only; produces a plain data object.
+- `adapters/IDebugAdapter.ts` → **interface only**: `VariableInfo`, `VisualizableKind`, `IDebugAdapter`. No logic.
+- `adapters/ILibProviders.ts` → **interface only**: `ILibImageProvider`, `ILibPlotProvider`, `ILibPointCloudProvider`. No logic.
+- `adapters/adapterRegistry.ts` → registry lookup only; no data fetching.
+- `adapters/<lang>/<lang>Types.ts` → **pure functions only**, no VS Code API, no `async`.
+- `adapters/<lang>/<lang>Debugger.ts` → all DAP communication; no UI, no panel management.
+- `adapters/<lang>/libs/<libName>/*Provider.ts` → implements one `ILib*Provider`; `canHandle()` + one `fetch*Data()`. Pure data fetching; never UI.
+- `adapters/<lang>/*Provider.ts` (coordinators) → iterate `LIB_*_PROVIDERS`; delegate to first `canHandle()` match; return to language adapter.
+- `viewers/viewerTypes.ts` → **plain data contracts only**; no logic, no imports.
 - `*Webview.ts` → HTML string generation only; no data fetching.
-- `panelManager.ts` → panel lifecycle + refresh; no type detection.
+- `panelManager.ts` → panel lifecycle + refresh via `IDebugAdapter`; no language-specific code.
 
 ### Front-end JS (media/)
 
@@ -110,12 +150,30 @@ media/                        # Static front-end assets (served by webviews)
 
 ## Common Tasks for Copilot
 
-### Add support for a new Python type
+### Add support for a new library (e.g. open3d for Python, or PCL for C++)
 
-1. **`src/utils/pythonTypes.ts`** — add a pattern to `IMAGE_TYPE_PATTERNS`, `PLOT_TYPE_PATTERNS`, or `POINTCLOUD_TYPE_PATTERNS`, and update `detectVisualizableType()` if shape-based logic is needed.
-2. **`src/matImage/matProvider.ts`** (or plot/pointCloud equivalent) — add a new `fetch*` branch in the provider's `fetch*Data` method.
-3. **`src/cvVariablesProvider.ts`** — `buildInspectExpr` should already cover new types via `hasattr`; update only if special metadata is needed.
-4. **Tests** — add a unit test in `src/test/` covering the new type's detection and (mocked) data extraction.
+1. Create `src/adapters/<lang>/libs/<libName>/imageProvider.ts` (and/or `plotProvider.ts`, `pointCloudProvider.ts`).
+2. Implement `ILibImageProvider` / `ILibPlotProvider` / `ILibPointCloudProvider` from `src/adapters/ILibProviders.ts`.
+   - `canHandle(typeName)` — return `true` for the type strings this library produces.
+   - `fetch*Data(session, varName, info)` — fetch and return the typed data object.
+3. Append a new instance to `LIB_IMAGE_PROVIDERS` (etc.) in the coordinator `src/adapters/<lang>/imageProvider.ts`.
+4. Add type-name patterns to `<lang>Types.ts` so Layer-1 quick detection recognises the new type.
+5. **Tests** — add a unit test in `src/test/`.
+
+### Add support for a new language (e.g. Rust, Java)
+
+1. Create `src/adapters/<lang>/` directory with:
+   - `<lang>Types.ts` — Layer-1 type detection from DAP type strings (pure functions).
+   - `<lang>Adapter.ts` — Implements `IDebugAdapter`. Coordinator `fetch*Data` methods delegate to `libs/`.
+   - `libs/<libName>/*Provider.ts` — per-library implementations of `ILib*Provider`.
+2. Register the new adapter in `src/adapters/adapterRegistry.ts` by appending to `ADAPTERS`.
+3. Implement `isSupportedSession()` to match the correct `session.type` strings.
+
+### Add support for a new Python type in an existing library
+
+1. **`src/adapters/python/libs/<libName>/imageProvider.ts`** (or `plotProvider.ts` / `pointCloudProvider.ts`) — add or extend the `fetch*Data` implementation.
+2. **`src/adapters/python/pythonTypes.ts`** — add a pattern to `IMAGE_TYPE_PATTERNS`, `PLOT_TYPE_PATTERNS`, or `POINTCLOUD_TYPE_PATTERNS` so Layer-1 detection recognises it.
+3. **Tests** — add a unit test in `src/test/`.
 
 ### Add a new webview control (e.g. a slider)
 

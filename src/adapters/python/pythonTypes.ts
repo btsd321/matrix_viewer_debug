@@ -1,19 +1,19 @@
 /**
- * pythonTypes.ts  — Pure, zero-side-effect type detection utilities.
+ * pythonTypes.ts — Pure, zero-side-effect type detection for Python variables.
  *
- * Two-layer detection mirrors the C++ version's architecture:
- *   Layer 1 (basicTypeDetect)  — fast string matching on the `type` field
- *                                returned by the DAP variables request.
- *   Layer 2 (detectVisualizableType) — uses an already-enriched VariableInfo
- *                                      object (shape / dtype / typeName) for
- *                                      accurate classification.
+ * Two-layer detection:
+ *   Layer 1 (basicTypeDetect)       — fast string match on the DAP `type` field
+ *   Layer 2 (detectVisualizableType) — shape + dtype aware classification
  *
- * No VS Code API or debug-session calls here.
+ * No VS Code API or debug-session calls in this file.
+ * VisualizableKind and VariableInfo are defined in the shared IDebugAdapter
+ * interface; this file re-exports them for convenience.
  */
 
-import { VariableInfo } from "./debugger";
+import { VariableInfo, VisualizableKind } from "../IDebugAdapter";
 
-export type VisualizableKind = "image" | "plot" | "pointcloud" | "unknown";
+// Re-export so legacy imports via utils/pythonTypes still resolve.
+export { VisualizableKind } from "../IDebugAdapter";
 
 // ── Layer 1: fast path ─────────────────────────────────────────────────────
 
@@ -79,10 +79,14 @@ export function detectVisualizableType(info: VariableInfo): VisualizableKind {
   }
 
   // ── list / tuple / array.array / range ───────────────────────────────────
-  if (/^builtins\.(list|tuple|range)$/.test(typeName) || /array\.array/.test(typeName)) {
+  if (
+    /^builtins\.(list|tuple|range)$/.test(typeName) ||
+    /array\.array/.test(typeName)
+  ) {
     return "plot";
   }
 
+  void length; // used for future list-length checks
   return "unknown";
 }
 

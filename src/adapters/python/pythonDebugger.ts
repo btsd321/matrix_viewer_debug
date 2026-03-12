@@ -1,36 +1,25 @@
 /**
- * debugger.ts — DAP (Debug Adapter Protocol) communication layer.
+ * pythonDebugger.ts — DAP communication layer for Python / debugpy sessions.
  *
- * All interactions with the Python debugpy debug session go through here.
- * Provides:
+ * All interactions with the Python debugpy debug session (and Jupyter) go
+ * through here.  Provides:
+ *   - Session type checks (debugpy, Jupyter)
  *   - Variable enumeration in the current scope
  *   - Python expression evaluation with timeout
  *   - Array data extraction (small: JSON, large: Base64 binary)
  *   - Common metadata fetch (shape, dtype, length)
  *
- * Design note: Python has a uniform inspection API (shape, dtype, __len__),
- * so unlike the C++ adapter we do NOT need per-debugger branching.
- * We only need to handle debugpy ("python") and optionally Jupyter ("jupyter").
+ * This module is internal to the Python adapter.
+ * External code should use PythonAdapter (pythonAdapter.ts) instead.
  */
 
 import * as vscode from "vscode";
+import { VariableInfo } from "../IDebugAdapter";
 
-// ── Public types ──────────────────────────────────────────────────────────
+// Re-export VariableInfo so legacy imports via utils/debugger still work.
+export { VariableInfo } from "../IDebugAdapter";
 
-export interface VariableInfo {
-  name: string;
-  /** DAP `type` string (e.g. "numpy.ndarray", "list") */
-  type: string;
-  /** Fully-qualified type name from evaluate, e.g. "numpy.ndarray" */
-  typeName?: string;
-  shape?: number[] | null;
-  dtype?: string | null;
-  length?: number | null;
-  /** Frame ID to use for evaluate requests */
-  frameId?: number;
-  /** DAP variablesReference (for browsing children) */
-  variablesReference?: number;
-}
+// ── Python-specific internal types ────────────────────────────────────────
 
 export interface RawArrayData {
   /** Flat byte array (from Base64 tobytes decode) */
@@ -291,7 +280,6 @@ export async function fetchListData(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function buildToListExpr(varName: string, info: VariableInfo): string {
-  // For numpy arrays, flatten to list; for others, just convert
   if (info.typeName?.startsWith("numpy")) {
     return `__import__('json').dumps(${varName}.tolist())`;
   }
@@ -330,14 +318,22 @@ function numbersToBytesForDtype(numbers: number[], dtype: string): Uint8Array {
     default:
       return new Uint8Array(new Float64Array(numbers).buffer);
   }
+  void n; // suppress unused warning
 }
 
 function bytesPerElementFromDtype(dtype: string): number | null {
   const map: Record<string, number> = {
-    uint8: 1, int8: 1,
-    uint16: 2, int16: 2, float16: 2,
-    uint32: 4, int32: 4, float32: 4,
-    uint64: 8, int64: 8, float64: 8,
+    uint8: 1,
+    int8: 1,
+    uint16: 2,
+    int16: 2,
+    float16: 2,
+    uint32: 4,
+    int32: 4,
+    float32: 4,
+    uint64: 8,
+    int64: 8,
+    float64: 8,
   };
   return map[dtype] ?? null;
 }

@@ -12,7 +12,7 @@
  */
 
 import * as vscode from "vscode";
-import { PlotData } from "./plotProvider";
+import { PlotData } from "../viewers/viewerTypes";
 
 export function buildPlotWebviewHtml(
   varName: string,

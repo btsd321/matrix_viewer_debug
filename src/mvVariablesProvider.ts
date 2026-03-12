@@ -1,5 +1,5 @@
 /**
- * CvVariablesProvider
+ * MvVariablesProvider
  *
  * VS Code TreeDataProvider for the "MatrixViewer Debug" panel in the Debug sidebar.
  * Maintains a list of pinned + auto-detected visualizable variables,
@@ -7,22 +7,18 @@
  */
 
 import * as vscode from "vscode";
-import {
-  getVariablesInScope,
-  VariableInfo,
-  evaluateExpression,
-} from "./utils/debugger";
-import { detectVisualizableType, basicTypeDetect } from "./utils/pythonTypes";
+import { VariableInfo } from "./adapters/IDebugAdapter";
+import { getAdapter } from "./adapters/adapterRegistry";
 import { PanelManager } from "./utils/panelManager";
 
 // ── Tree Node Types ────────────────────────────────────────────────────────
 
-export type CvVariableKind = "image" | "plot" | "pointcloud" | "unknown";
+export type MvVariableKind = "image" | "plot" | "pointcloud" | "unknown";
 
-export class CvVariableItem extends vscode.TreeItem {
+export class MvVariableItem extends vscode.TreeItem {
   constructor(
     public readonly variableName: string,
-    public readonly kind: CvVariableKind,
+    public readonly kind: MvVariableKind,
     public readonly typeLabel: string = "",
     public readonly shapeLabel: string = ""
   ) {
@@ -30,7 +26,7 @@ export class CvVariableItem extends vscode.TreeItem {
     this.contextValue = "mvVariable";
     this.description = shapeLabel ? `${typeLabel}  ${shapeLabel}` : typeLabel;
     this.tooltip = `${variableName}: ${typeLabel} ${shapeLabel}`.trim();
-    this.iconPath = CvVariableItem.iconFor(kind);
+    this.iconPath = MvVariableItem.iconFor(kind);
     this.command = {
       command: "matrixViewer.viewVariable",
       title: "Visualize",
@@ -38,7 +34,7 @@ export class CvVariableItem extends vscode.TreeItem {
     };
   }
 
-  private static iconFor(kind: CvVariableKind): vscode.ThemeIcon {
+  private static iconFor(kind: MvVariableKind): vscode.ThemeIcon {
     switch (kind) {
       case "image":
         return new vscode.ThemeIcon("file-media");
@@ -52,21 +48,21 @@ export class CvVariableItem extends vscode.TreeItem {
   }
 }
 
-export class CvGroupItem extends vscode.TreeItem {
-  public readonly children: CvVariableItem[] = [];
+export class MvGroupItem extends vscode.TreeItem {
+  public readonly children: MvVariableItem[] = [];
 
   constructor(public readonly groupName: string) {
     super(groupName, vscode.TreeItemCollapsibleState.Expanded);
-    this.contextValue = "cvGroup";
+    this.contextValue = "mvGroup";
     this.iconPath = new vscode.ThemeIcon("folder");
   }
 }
 
-type TreeNode = CvGroupItem | CvVariableItem;
+type TreeNode = MvGroupItem | MvVariableItem;
 
 // ── Provider ───────────────────────────────────────────────────────────────
 
-export class CvVariablesProvider
+export class MvVariablesProvider
   implements vscode.TreeDataProvider<TreeNode>
 {
   private _onDidChangeTreeData = new vscode.EventEmitter<
@@ -75,7 +71,7 @@ export class CvVariablesProvider
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   /** All pinned variables (added manually or via auto-detect) */
-  private pinnedVars = new Map<string, CvVariableItem>();
+  private pinnedVars = new Map<string, MvVariableItem>();
 
   /** User-defined groups: groupName → variableNames[] */
   private groups = new Map<string, string[]>();
@@ -95,7 +91,7 @@ export class CvVariablesProvider
     if (!element) {
       return this.buildRoots();
     }
-    if (element instanceof CvGroupItem) {
+    if (element instanceof MvGroupItem) {
       return element.children;
     }
     return [];
@@ -109,7 +105,7 @@ export class CvVariablesProvider
 
     // User-defined groups
     for (const [groupName, varNames] of this.groups) {
-      const group = new CvGroupItem(groupName);
+      const group = new MvGroupItem(groupName);
       for (const name of varNames) {
         const item = this.pinnedVars.get(name);
         if (item) {
@@ -142,14 +138,15 @@ export class CvVariablesProvider
     if (this.pinnedVars.has(name)) {
       return;
     }
-    const kind = basicTypeDetect(typeStr);
-    const item = new CvVariableItem(name, kind, typeStr);
+    const adapter = this.getActiveAdapter();
+    const kind = adapter?.basicTypeDetect(typeStr) ?? "unknown";
+    const item = new MvVariableItem(name, kind, typeStr);
     this.pinnedVars.set(name, item);
     this._onDidChangeTreeData.fire();
   }
 
   /** Add a fully-resolved variable item */
-  addVariableItem(item: CvVariableItem): void {
+  addVariableItem(item: MvVariableItem): void {
     if (!this.pinnedVars.has(item.variableName)) {
       this.pinnedVars.set(item.variableName, item);
       this._onDidChangeTreeData.fire();
@@ -191,11 +188,17 @@ export class CvVariablesProvider
 
   /**
    * Auto-detect all visualizable variables in the current scope.
-   * Uses the fast basic-detection pass first, then enriches with evaluate.
+   * Uses the fast basic-detection pass (adapter Layer 1) first, then
+   * enriches matching variables with shape/dtype via adapter.getVariableInfo.
    */
   async autoDetectVariables(session: vscode.DebugSession): Promise<void> {
-    const rawVars = await getVariablesInScope(session);
-    const newItems: CvVariableItem[] = [];
+    const adapter = getAdapter(session);
+    if (!adapter) {
+      return;
+    }
+
+    const rawVars = await adapter.getVariablesInScope(session);
+    const newItems: MvVariableItem[] = [];
 
     for (const v of rawVars) {
       // Skip already pinned
@@ -203,34 +206,29 @@ export class CvVariablesProvider
         continue;
       }
 
-      const basicKind = basicTypeDetect(v.type ?? "");
+      const basicKind = adapter.basicTypeDetect(v.type ?? "");
       if (basicKind === "unknown") {
         continue;
       }
 
-      // Enrich with shape/dtype via evaluate
+      // Enrich with shape/dtype via adapter
       let shapeLabel = "";
       let typeLabel = v.type ?? "";
       try {
-        const info = await evaluateExpression(
-          session,
-          buildInspectExpr(v.name),
-          v.frameId
-        );
+        const info = await adapter.getVariableInfo(session, v.name, v.frameId);
         if (info) {
-          const parsed = JSON.parse(info);
-          typeLabel = parsed.typeName ?? typeLabel;
-          shapeLabel = parsed.shape
-            ? `(${(parsed.shape as number[]).join("×")})`
-            : parsed.length != null
-            ? `[${parsed.length}]`
+          typeLabel = info.typeName ?? typeLabel;
+          shapeLabel = info.shape
+            ? `(${(info.shape as number[]).join("\u00d7")})`
+            : info.length != null
+            ? `[${info.length}]`
             : "";
         }
       } catch {
         // Ignore enrichment failures; still show the variable
       }
 
-      const item = new CvVariableItem(v.name, basicKind, typeLabel, shapeLabel);
+      const item = new MvVariableItem(v.name, basicKind, typeLabel, shapeLabel);
       newItems.push(item);
     }
 
@@ -245,23 +243,15 @@ export class CvVariablesProvider
       this._onDidChangeTreeData.fire();
     }
   }
-}
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Private helpers ────────────────────────────────────────────────────
 
-/**
- * Build a Python expression that returns a JSON-serialisable dict describing
- * the type, shape, and dtype of a variable — without importing anything that
- * might not be in the target environment.
- */
-function buildInspectExpr(varName: string): string {
-  // Uses only builtins + conditional attribute access to avoid import errors
-  return (
-    `__import__('json').dumps({` +
-    `'typeName': type(${varName}).__module__ + '.' + type(${varName}).__name__,` +
-    `'shape': list(${varName}.shape) if hasattr(${varName}, 'shape') else None,` +
-    `'dtype': str(${varName}.dtype) if hasattr(${varName}, 'dtype') else None,` +
-    `'length': len(${varName}) if hasattr(${varName}, '__len__') else None` +
-    `})`
-  );
+  /** Return the adapter for the currently active debug session, or null. */
+  private getActiveAdapter() {
+    const session = vscode.debug.activeDebugSession;
+    if (!session) {
+      return null;
+    }
+    return getAdapter(session);
+  }
 }

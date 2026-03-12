@@ -1,4 +1,4 @@
-# CV DebugMate Python
+# Matrix Viewer Debug
 
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.93%2B-blue?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdull-bird%2Fcv_debug_mate_python%2Fmain%2Fpackage.json&query=%24.version&label=version&color=blue)](https://github.com/dull-bird/cv_debug_mate_python)
@@ -8,7 +8,7 @@
 
 [English](README.md) | 中文
 
-一个在 Python 调试过程中可视化 1/2/3D 数据结构的 VS Code 扩展。
+一个在调试过程中可视化 1/2/3D 数据结构的 VS Code 扩展。目前支持 **Python**（debugpy）；**C++**（cppdbg / lldb）支持正在开发中。
 
 **灵感来源于 [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp) 以及 Visual Studio 的 [Image Watch](https://marketplace.visualstudio.com/items?itemName=VisualCPPTeam.ImageWatch2022) 插件。**
 
@@ -38,12 +38,11 @@
 | | `numpy.ndarray` shape `(H, W, 1/3/4)` | 🖼️ 图像查看器 |
 | | `PIL.Image.Image` | 🖼️ 图像查看器 |
 | | `torch.Tensor` shape `(H, W)` / `(C, H, W)` / `(1, C, H, W)` | 🖼️ 图像查看器 |
-| | `tensorflow.Tensor` shape `(H, W, C)` | 🖼️ 图像查看器 |
 | **点云（3D）** | `numpy.ndarray` shape `(N, 3)` — XYZ | 📊 3D 查看器 |
 | | `numpy.ndarray` shape `(N, 6)` — XYZ + RGB | 📊 3D 查看器 |
 | | 元素为长度 3/6 的 `list` 或 `tuple` | 📊 3D 查看器 |
 | **曲线（1D）** | `numpy.ndarray` shape `(N,)` 或 `(N, 1)` | 📈 曲线查看器 |
-| | `torch.Tensor` / `tensorflow.Tensor`（1D）| 📈 曲线查看器 |
+| | `torch.Tensor`（1D）| 📈 曲线查看器 |
 | | 元素为数值的 `list` / `tuple` | 📈 曲线查看器 |
 
 > **支持的数据类型**：`uint8`、`uint16`、`int8`、`int16`、`int32`、`int64`、`float16`、`float32`、`float64`、`bool`
@@ -65,12 +64,13 @@
 
 ## 🔧 调试器支持
 
-| 调试器 | Session 类型 | 1D 数据 | 图像 | 点云 | 备注 |
-| --------- | ------------ | ------- | ----- | ----------- | ----- |
-| debugpy | `python` | ✅ | ✅ | ✅ | VS Code Python 扩展 |
-| debugpy | `debugpy` | ✅ | ✅ | ✅ | 直接启动 debugpy |
+| 调试器 | Session 类型 | 1D 数据 | 图像 | 点云 | 状态 |
+| --------- | ------------ | ------- | ----- | ----------- | ------ |
+| debugpy | `python` / `debugpy` | ✅ | ✅ | ✅ | **已支持** |
+| Jupyter | `jupyter` | ✅ | ✅ | ✅ | **已支持** |
+| cppdbg / lldb | `cppdbg` / `lldb` | 🔧 | 🔧 | 🔧 | **开发中** |
 
-> 需要安装 [Python 扩展](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（`ms-python.python`）或兼容 debugpy 的启动配置。
+> Python 支持需要安装 [Python 扩展](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（`ms-python.python`）或兼容 debugpy 的启动配置。
 
 ---
 
@@ -167,10 +167,30 @@ npm run compile
 ## 📋 系统要求
 
 - VS Code 1.93.0+
-- Python 3.8+
-- [Python 扩展](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（`ms-python.python`）
-- debugpy（随 Python 扩展自动安装）
-- 可选：`numpy`、`Pillow`、`torch`、`tensorflow`——根据需要可视化的类型按需安装
+- **Python 调试**：Python 3.8+、[Python 扩展](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（`ms-python.python`）、debugpy（随 Python 扩展自动安装）
+- **C++ 调试** *（即将支持）*：[C/C++ 扩展](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) 或 [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+- 可选 Python 包：`numpy`、`Pillow`、`torch`——根据需要可视化的类型按需安装
+
+---
+
+## 🏗️ 架构说明
+
+扩展采用两层 Provider 层级结构，新增库或语言品级无需修改已有代码：
+
+```
+IDebugAdapter             ← 每种语言一个实现（Python、C++、…）
+  └─ *Provider（分发器）      ← 每种显示类型一个（image / plot / pointCloud）
+       └─ ILib*Provider（libs/）  ← 每个三方库一个文件
+            numpy/imageProvider.ts
+            pil/imageProvider.ts
+            torch/imageProvider.ts
+            … open3d/pointCloudProvider.ts（未来）
+```
+
+| 添加内容 | 在哪里添加 |
+|---|---|
+| 新库（如 open3d） | `src/adapters/<lang>/libs/<libName>/` |
+| 新语言（如 Rust） | `src/adapters/<lang>/` + 在 `adapterRegistry.ts` 中注册 |
 
 ---
 

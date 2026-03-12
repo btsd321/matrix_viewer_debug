@@ -1,4 +1,4 @@
-# CV DebugMate Python
+# Matrix Viewer Debug
 
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.93%2B-blue?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdull-bird%2Fcv_debug_mate_python%2Fmain%2Fpackage.json&query=%24.version&label=version&color=blue)](https://github.com/dull-bird/cv_debug_mate_python)
@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README_CN.md)
 
-A Visual Studio Code extension for visualizing 1/2/3D data structures during Python debugging.
+A Visual Studio Code extension for visualizing 1D/2D/3D data structures during debugging. Supports **Python** (debugpy) today; **C++** (cppdbg / lldb) support is in development.
 
 **Inspired by [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp) and [Image Watch](https://marketplace.visualstudio.com/items?itemName=VisualCPPTeam.ImageWatch2022) for Visual Studio.**
 
@@ -38,12 +38,11 @@ A Visual Studio Code extension for visualizing 1/2/3D data structures during Pyt
 | | `numpy.ndarray` shape `(H, W, 1/3/4)` | 🖼️ Image Viewer |
 | | `PIL.Image.Image` | 🖼️ Image Viewer |
 | | `torch.Tensor` shape `(H, W)` / `(C, H, W)` / `(1, C, H, W)` | 🖼️ Image Viewer |
-| | `tensorflow.Tensor` shape `(H, W, C)` | 🖼️ Image Viewer |
 | **Point Cloud (3D)** | `numpy.ndarray` shape `(N, 3)` — XYZ | 📊 3D Viewer |
 | | `numpy.ndarray` shape `(N, 6)` — XYZ + RGB | 📊 3D Viewer |
 | | `list` of length-3/6 tuples or lists | 📊 3D Viewer |
 | **Plot (1D)** | `numpy.ndarray` shape `(N,)` or `(N, 1)` | 📈 Plot Viewer |
-| | `torch.Tensor` / `tensorflow.Tensor` (1D) | 📈 Plot Viewer |
+| | `torch.Tensor` (1D) | 📈 Plot Viewer |
 | | `list` / `tuple` of numeric values | 📈 Plot Viewer |
 
 > **Supported dtypes**: `uint8`, `uint16`, `int8`, `int16`, `int32`, `int64`, `float16`, `float32`, `float64`, `bool`
@@ -65,12 +64,13 @@ A Visual Studio Code extension for visualizing 1/2/3D data structures during Pyt
 
 ## 🔧 Debugger Support
 
-| Debugger | Session Type | 1D Data | Image | Point Cloud | Notes |
-| --------- | ------------ | ------- | ----- | ----------- | ----- |
-| debugpy | `python` | ✅ | ✅ | ✅ | VS Code Python extension |
-| debugpy | `debugpy` | ✅ | ✅ | ✅ | Direct debugpy launch |
+| Debugger | Session Type | 1D Data | Image | Point Cloud | Status |
+| --------- | ------------ | ------- | ----- | ----------- | ------ |
+| debugpy | `python` / `debugpy` | ✅ | ✅ | ✅ | **Supported** |
+| Jupyter | `jupyter` | ✅ | ✅ | ✅ | **Supported** |
+| cppdbg / lldb | `cppdbg` / `lldb` | 🔧 | 🔧 | 🔧 | **In development** |
 
-> Requires the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) (`ms-python.python`) or a compatible debugpy launch config.
+> Python support requires the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) (`ms-python.python`) or a compatible debugpy launch config.
 
 ---
 
@@ -167,10 +167,30 @@ npm run compile
 ## 📋 Requirements
 
 - VS Code 1.93.0+
-- Python 3.8+
-- [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) (`ms-python.python`)
-- debugpy (installed automatically with the Python extension)
-- Optional: `numpy`, `Pillow`, `torch`, `tensorflow` — depending on the types you want to visualize
+- **Python debugging**: Python 3.8+, [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) (`ms-python.python`), debugpy (installed automatically with the Python extension)
+- **C++ debugging** *(coming soon)*: [C/C++ extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) or [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+- Optional Python packages: `numpy`, `Pillow`, `torch` — depending on the types you want to visualize
+
+---
+
+## 🏗️ Architecture Overview
+
+The extension uses a two-level provider hierarchy so that adding a new library or a new language never requires touching existing code:
+
+```
+IDebugAdapter          ← one implementation per language (Python, C++, …)
+  └─ *Provider (coordinator)   ← one coordinator per viewer type (image / plot / pointCloud)
+       └─ ILib*Provider (libs/)  ← one file per third-party library
+            numpy/imageProvider.ts
+            pil/imageProvider.ts
+            torch/imageProvider.ts
+            … open3d/pointCloudProvider.ts (future)
+```
+
+| What to add | Where to add it |
+|---|---|
+| New **library** (e.g. open3d) | `src/adapters/<lang>/libs/<libName>/` |
+| New **language** (e.g. Rust) | `src/adapters/<lang>/` + register in `adapterRegistry.ts` |
 
 ---
 

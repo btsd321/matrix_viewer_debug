@@ -13,7 +13,7 @@
  */
 
 import * as vscode from "vscode";
-import { ImageData } from "./matProvider";
+import { ImageData } from "../viewers/viewerTypes";
 
 export function buildImageWebviewHtml(
   varName: string,

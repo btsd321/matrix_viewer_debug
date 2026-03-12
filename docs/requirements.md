@@ -1,7 +1,8 @@
-# CV DebugMate Python 需求文档
+# CV DebugMate 需求文档
 
 > 参考项目: [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp)  
-> Python 版 VS Code 调试可视化扩展，在 Python 调试过程中可视化 1/2/3D 数据结构。
+> VS Code 调试可视化扩展，在调试过程中可视化 1/2/3D 数据结构。
+> 目前支持 **Python**（debugpy）；**C++**（cppdbg / lldb）支持正在开发中。
 
 ---
 
@@ -159,50 +160,89 @@ evaluate: "import base64; import numpy as np; base64.b64encode(<varname>.tobytes
 ```
 src/
 ├── extension.ts              # 扩展入口，变量可视化主逻辑
-├── cvVariablesProvider.ts    # TreeView 变量列表提供器
+├── mvVariablesProvider.ts    # TreeView 变量列表提供器
+├── adapters/                 # 语言适配器层（核心扩展点）
+│   ├── IDebugAdapter.ts      # 统一接口：VariableInfo + VisualizableKind + IDebugAdapter
+│   ├── adapterRegistry.ts    # 注册中心：session.type → IDebugAdapter
+│   ├── python/               # Python / debugpy / Jupyter 适配器
+│   │   ├── pythonDebugger.ts # DAP 通信（evaluate / fetchArrayData / getVariablesInScope）
+│   │   ├── pythonTypes.ts    # 纯函数类型检测（Layer 1 + Layer 2）
+│   │   ├── imageProvider.ts  # 图像数据获取（ndarray / PIL / Tensor）
+│   │   ├── plotProvider.ts   # 1D 数据获取
+│   │   ├── pointCloudProvider.ts # 点云数据获取
+│   │   └── pythonAdapter.ts  # 实现 IDebugAdapter，委托给上述 providers
+│   └── cpp/                  # C++ 适配器（骨架，待实现）
+│       ├── cppTypes.ts       # Layer-1 类型检测（cv::Mat / Eigen / std::vector / pcl）
+│       └── cppAdapter.ts     # 实现 IDebugAdapter，各 fetch 方法返回 null
+├── viewers/
+│   └── viewerTypes.ts        # 语言无关展示数据类型（ImageData / PlotData / PointCloudData）
 ├── utils/
-│   ├── debugger.ts           # 调试器适配层（DAP 通信，数据获取）
-│   ├── pythonTypes.ts        # Python 类型检测（纯字符串/正则匹配）
-│   ├── panelManager.ts       # Webview 面板管理
+│   ├── debugger.ts           # 兼容 re-export → adapters/python/pythonDebugger
+│   ├── pythonTypes.ts        # 兼容 re-export → adapters/python/pythonTypes
+│   ├── panelManager.ts       # Webview 面板生命周期、自动刷新（使用 IDebugAdapter）
 │   └── syncManager.ts        # 变量配对同步管理
 ├── matImage/
-│   ├── matProvider.ts        # 2D 图像数据读取（numpy/PIL/tensor）
-│   └── matWebview.ts         # 图像 Webview 渲染（复用 C++ 版 HTML/JS）
+│   ├── matProvider.ts        # 兼容 re-export → adapters/python/imageProvider
+│   └── matWebview.ts         # 图像 Webview HTML 模板
 ├── plot/
-│   ├── plotProvider.ts       # 1D 数据读取
-│   └── plotWebview.ts        # 曲线图 Webview 渲染
+│   ├── plotProvider.ts       # 兼容 re-export → adapters/python/plotProvider
+│   └── plotWebview.ts        # 曲线图 Webview HTML 模板（uPlot）
 └── pointCloud/
-    ├── pointCloudProvider.ts # 3D 点云数据读取
-    └── pointCloudWebview.ts  # 点云 Webview 渲染（Three.js）
+    ├── pointCloudProvider.ts # 兼容 re-export → adapters/python/pointCloudProvider
+    └── pointCloudWebview.ts  # 点云 Webview HTML 模板（Three.js）
 ```
 
-### 5.2 类型检测架构（对应 C++ 版的两层检测）
+### 5.2 适配器模式设计
+
+**核心原则**：扩展核心（extension.ts、panelManager.ts、mvVariablesProvider.ts）**仅依赖接口 IDebugAdapter**，永远不导入任何语言特定代码。
+
+| 层次 | 职责 | 语言相关？ |
+|------|------|----------|
+| `IDebugAdapter` 接口 | 定义变量枚举、类型检测、数据获取的统一契约 | 否 |
+| `ILibProviders.ts` | `ILibImageProvider` / `ILibPlotProvider` / `ILibPointCloudProvider` 三方库统一契约 | 否 |
+| `viewers/viewerTypes.ts` | `ImageData` / `PlotData` / `PointCloudData` 展示端数据格式 | 否 |
+| `adapters/<lang>/libs/<libName>/` | 具体库实现：`canHandle()` + `fetch*Data()` | 是 |
+| `adapters/<lang>/*Provider.ts` | 分发器：遍历 `LIB_*_PROVIDERS` 列表，委托给首个匹配的库 | 是 |
+| `adapters/python/` | Python/debugpy/Jupyter 的完整实现 | 是 |
+| `adapters/cpp/` | C++ 骨架，fetch 分发器待实现 | 是 |
+| `adapterRegistry.ts` | `getAdapter(session)` 按序匹配 | 否 |
+
+**添加新库支持的步骤**：
+1. 在 `src/adapters/<lang>/libs/<libName>/` 下实现 `ILib*Provider`
+2. 将新实例追加到分发器的 `LIB_*_PROVIDERS` 数组中
+3. 在 `<lang>Types.ts` 中补充 Layer-1 匹配模式
+
+**添加新语言支持的步骤**：
+1. 在 `src/adapters/<lang>/` 下实现 `IDebugAdapter`、创建 `libs/` 子目录
+2. 在 `adapterRegistry.ts` 的 `ADAPTERS` 数组中注册
+
+### 5.3 类型检测架构（对应 C++ 版的两层检测）
 
 **第一层：基础检测（快速，用于 TreeView 列表分类）**
-- 通过变量的 `type` 字符串匹配：`"numpy.ndarray"`, `"PIL.Image"`, `"torch.Tensor"`, `"list"`, `"tuple"` 等
+- 通过变量的 `type` 字符串匹配：`"numpy.ndarray"`, `"PIL.Image"`, `"torch.Tensor"`, `"list"`, `"tuple"`, `"cv::Mat"` 等
 - 不需要调试器 evaluate，速度快
 
 **第二层：增强检测（精确，用于实际可视化）**
-- 通过 DAP evaluate 执行：
-  - `type(var).__name__` 获取类型名
-  - `var.shape` 获取形状
-  - `var.dtype` 获取数据类型
-  - `len(var)` 获取长度
-- 根据 shape 和 dtype 精确判断图像/曲线/点云
+- 通过 DAP evaluate / 变量子结点获取 shape、dtype 等信息
+- 根据 shape 和 dtype 精确判断图像 / 曲线 / 点云
 
-### 5.3 数据读取流程
+### 5.4 数据读取流程
 
 ```
 用户点击变量
     ↓
-基础类型检测（type 字符串匹配）
+adapterRegistry.getAdapter(session)     # 根据 session.type 选择适配器
     ↓
-增强类型检测（evaluate shape/dtype）
+adapter.basicTypeDetect(类型字符串)     # Layer-1 快速分类
+    ↓
+adapter.getVariableInfo(session, 变量名)  # 获取 shape / dtype
+    ↓
+adapter.detectVisualizableType(info)     # Layer-2 精确判断
     ↓
 判断数据大小
     ↓
-小数据 → evaluate tolist() → JSON 传输
-大数据 → evaluate tobytes() → Base64 编码传输
+小数据 → adapter.fetch*(JSON 路径)
+大数据 → adapter.fetch*(Base64 路径)
     ↓
 Webview 渲染
 ```
@@ -239,7 +279,7 @@ Webview 渲染
 | 数据获取方式 | 通过 DAP `readMemory` 直接读取内存 | 通过 DAP `evaluate` 执行 Python 表达式 |
 | 类型检测复杂度 | 高（需区分 LLDB/GDB/MSVC，STL 内部成员名差异） | 低（统一 debugpy，Python 对象有统一接口） |
 | 支持的图像库 | OpenCV cv::Mat 为主 | numpy ndarray 为主，兼容 PIL/PyTorch |
-| 调试器适配 | 需要适配 3 种调试器（LLDB/GDB/MSVC） | 主要适配 debugpy 一种 |
+| 调试器适配 | `cppAdapter.ts` 实现 `IDebugAdapter`（骨架已完成，待填充） | `pythonAdapter.ts` 实现 `IDebugAdapter`（完整实现） |
 | 内存读取 | 分块并行内存读取（`readMemory` DAP） | Base64 encoded bytes via evaluate |
 | 指针类型 | 需要解引用指针 | Python 无裸指针，不需要 |
 
@@ -275,6 +315,13 @@ Webview 渲染
 - [x] 伪彩色映射（Colormap）
 - [ ] Jupyter Notebook 调试支持
 
+### Phase 5：C++ 适配器
+- [ ] `cppAdapter.ts` 实现 `getVariablesInScope`
+- [ ] `cv::Mat` 图像数据获取
+- [ ] `Eigen::Matrix` 图像 / 曲线数据获取
+- [ ] `std::vector<T>` 曲线数据获取
+- [ ] `pcl::PointCloud` 点云数据获取
+
 ---
 
 ## 十、当前进度备忘（2026-03-12）
@@ -293,17 +340,36 @@ Webview 渲染
 #### TypeScript 源码（逻辑完整，非占位）
 | 文件 | 状态 | 说明 |
 |------|------|------|
-| `src/extension.ts` | ✅ | 命令注册、DAP 事件监听、可视化分发 |
-| `src/cvVariablesProvider.ts` | ✅ | TreeView 自动检测、分组、手动添加 |
-| `src/utils/debugger.ts` | ✅ | DAP 通信：evaluate / fetchArrayData（JSON + Base64）|
-| `src/utils/pythonTypes.ts` | ✅ | 两层类型检测纯函数 |
-| `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新、sync broadcast |
+| `src/extension.ts` | ✅ | 命令注册、DAP 事件监听、可视化分发（使用 adapterRegistry）|
+| `src/mvVariablesProvider.ts` | ✅ | TreeView 自动检测、分组、手动添加（使用 IDebugAdapter）|
+| `src/adapters/IDebugAdapter.ts` | ✅ | 统一适配器接口定义 |
+| `src/adapters/ILibProviders.ts` | ✅ | 三方库统一接口（ILibImageProvider / ILibPlotProvider / ILibPointCloudProvider）|
+| `src/adapters/adapterRegistry.ts` | ✅ | session.type → 适配器 注册中心 |
+| `src/adapters/python/pythonDebugger.ts` | ✅ | DAP 通信：evaluate / fetchArrayData（JSON + Base64）|
+| `src/adapters/python/pythonTypes.ts` | ✅ | 两层类型检测纯函数 |
+| `src/adapters/python/imageProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibImageProvider |
+| `src/adapters/python/plotProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibPlotProvider |
+| `src/adapters/python/pointCloudProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibPointCloudProvider |
+| `src/adapters/python/pythonAdapter.ts` | ✅ | 实现 IDebugAdapter，委托给分发器 |
+| `src/adapters/python/libs/utils.ts` | ✅ | 公用辅助函数 |
+| `src/adapters/python/libs/numpy/imageProvider.ts` | ✅ | ndarray / cv2.Mat 图像获取 |
+| `src/adapters/python/libs/numpy/plotProvider.ts` | ✅ | ndarray 1D 曲线获取 |
+| `src/adapters/python/libs/numpy/pointCloudProvider.ts` | ✅ | ndarray (N,3)/(N,6) 点云获取 |
+| `src/adapters/python/libs/pil/imageProvider.ts` | ✅ | PIL.Image 图像获取 |
+| `src/adapters/python/libs/torch/imageProvider.ts` | ✅ | torch.Tensor 图像获取 |
+| `src/adapters/python/libs/torch/plotProvider.ts` | ✅ | torch.Tensor 1D 曲线获取 |
+| `src/adapters/python/libs/builtins/plotProvider.ts` | ✅ | list / tuple / range 曲线获取 |
+| `src/adapters/python/libs/builtins/pointCloudProvider.ts` | ✅ | list of (x,y,z) 点云获取 |
+| `src/adapters/cpp/cppTypes.ts` | ✅ | Layer-1 C++ 类型检测骨架 |
+| `src/adapters/cpp/cppAdapter.ts` | ✅ | IDebugAdapter 实现骨架（分发器待实现）|
+| `src/adapters/cpp/libs/opencv/imageProvider.ts` | ✅ | cv::Mat 骨架（TODO）|
+| `src/adapters/cpp/libs/eigen/plotProvider.ts` | ✅ | Eigen::Matrix 骨架（TODO）|
+| `src/adapters/cpp/libs/pcl/pointCloudProvider.ts` | ✅ | pcl::PointCloud 骨架（TODO）|
+| `src/viewers/viewerTypes.ts` | ✅ | 语言无关统一展示数据类型 |
+| `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新、sync broadcast（使用 IDebugAdapter）|
 | `src/utils/syncManager.ts` | ✅ | idle → waiting → paired 状态机 |
-| `src/matImage/matProvider.ts` | ✅ | ndarray / PIL / Tensor 三条数据获取路径 |
 | `src/matImage/matWebview.ts` | ✅ | 图像 HTML 模板（CSP nonce）|
-| `src/plot/plotProvider.ts` | ✅ | 1D 数据获取（ndarray / tensor / list）|
 | `src/plot/plotWebview.ts` | ✅ | 曲线图 HTML 模板（uPlot）|
-| `src/pointCloud/pointCloudProvider.ts` | ✅ | (N,3)/(N,6) 点云获取 |
 | `src/pointCloud/pointCloudWebview.ts` | ✅ | 点云 HTML 模板（Three.js）|
 
 #### 前端资源 media/（逻辑完整）
