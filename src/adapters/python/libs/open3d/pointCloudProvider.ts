@@ -61,6 +61,8 @@ export class Open3DPointCloudProvider implements ILibPointCloudProvider {
       dtype: "float64",
       frameId: info.frameId,
     };
+    // Force binary socket transfer (thresholdBytes=0) — same DAP string-length
+    // concern as NumpyPointCloudProvider: Nx3 float64 JSON >> 1 DAP packet.
     const xyzRaw = await fetchArrayData(
       session,
       `__import__('numpy').asarray(${varName}.points)`,

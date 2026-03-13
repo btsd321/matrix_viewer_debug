@@ -177,7 +177,12 @@ export async function getVariableInfo(
 
 // ── Array Data Extraction ─────────────────────────────────────────────────
 
-const LARGE_DATA_THRESHOLD_BYTES = 1 * 1024 * 1024; // 1 MB default
+// Threshold for the *estimated JSON character count* of an array.
+// debugpy truncates evaluate() results at roughly 32 K – 64 K characters;
+// we use 32 K as a conservative ceiling so JSON.parse never sees a partial string.
+// Arrays whose JSON representation is estimated to exceed this limit are
+// transferred via binary TCP socket instead.
+const LARGE_DATA_THRESHOLD_JSON_CHARS = 32 * 1024; // 32 K chars
 
 /**
  * Fetch the numeric data of a Python array variable.
@@ -190,7 +195,7 @@ export async function fetchArrayData(
   session: vscode.DebugSession,
   varName: string,
   info: VariableInfo,
-  thresholdBytes = LARGE_DATA_THRESHOLD_BYTES
+  thresholdJsonChars = LARGE_DATA_THRESHOLD_JSON_CHARS
 ): Promise<RawArrayData | null> {
   if (!info.shape || !info.dtype) {
     return null;
@@ -198,10 +203,17 @@ export async function fetchArrayData(
 
   const { shape, dtype } = info;
   const totalElements = shape.reduce((a, b) => a * b, 1);
-  const elBytes = bytesPerElementFromDtype(dtype);
-  const totalBytes = totalElements * (elBytes ?? 4);
 
-  if (totalBytes < thresholdBytes) {
+  // Compare estimated JSON text size against the threshold.
+  // json.dumps() produces far more bytes than the raw binary:
+  //   float32/float64 → ~12-18 ASCII chars per number
+  //   int32           → ~6
+  //   uint8           → ~3
+  // Using this estimate prevents DAP string-length truncation for arrays
+  // that are small in binary but large when serialised as JSON.
+  const estimatedJsonBytes = totalElements * jsonCharsPerElement(dtype);
+
+  if (estimatedJsonBytes < thresholdJsonChars) {
     return fetchArraySmall(session, varName, info);
   } else {
     return fetchArrayLarge(session, varName, info);
@@ -400,4 +412,36 @@ function bytesPerElementFromDtype(dtype: string): number | null {
     float64: 8,
   };
   return map[dtype] ?? null;
+}
+
+/**
+ * Conservative upper-bound estimate of ASCII characters json.dumps() produces
+ * per array element for a given dtype. Used by fetchArrayData to decide JSON
+ * vs binary transfer path.
+ *
+ * Rules:
+ *   - Integer types: exact worst-case ceil(log10(max_abs_value)) + sign + comma.
+ *   - Float types: numpy tolist() promotes ALL float subtypes to Python float
+ *     (float64), so json.dumps always uses float64 repr regardless of original
+ *     dtype.  Worst case is scientific notation e.g. "-1.7976931348623157e+308"
+ *     = 24 chars.  We use 26 to include array brackets/list overhead per slot
+ *     and leave a safety margin.
+ */
+function jsonCharsPerElement(dtype: string): number {
+  switch (dtype) {
+    case "uint8":                return 4;   // max "255,"
+    case "int8":                 return 5;   // max "-128,"
+    case "uint16":               return 6;   // max "65535,"
+    case "int16":                return 7;   // max "-32768,"
+    case "uint32":               return 11;  // max "4294967295,"
+    case "int32":                return 12;  // max "-2147483648,"
+    case "uint64":               return 21;  // max "18446744073709551615,"
+    case "int64":                return 21;  // max "-9223372036854775808,"
+    // All float dtypes: tolist() → Python float → float64 repr, worst case
+    // "-1.7976931348623157e+308," = 25 chars.  Use 26 as safe upper bound.
+    case "float16":
+    case "float32":
+    case "float64":
+    default:                     return 26;
+  }
 }
