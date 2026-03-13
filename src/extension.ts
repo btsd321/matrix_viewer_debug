@@ -1,5 +1,5 @@
 /**
- * MatrixViewer Debug - Extension Entry Point
+ * MatrixViewer - Extension Entry Point
  *
  * Registers all commands, views, and debug event listeners.
  * Coordinates the visualization pipeline when debugging stops.
@@ -11,10 +11,15 @@ import { PanelManager } from "./utils/panelManager";
 import { SyncManager } from "./utils/syncManager";
 import { getAdapter } from "./adapters/adapterRegistry";
 
-// [DEBUG] Dedicated output channel — delete alongside all [DEBUG] lines when done
-const debugOut = vscode.window.createOutputChannel("MatrixViewer Debug");
+const logOut = vscode.window.createOutputChannel("MatrixViewer");
+
+function log(level: "DEBUG" | "INFO" | "WARN" | "ERROR", message: string): void {
+  logOut.appendLine(`[${level}] ${message}`);
+}
 
 export function activate(context: vscode.ExtensionContext) {
+  context.subscriptions.push(logOut);
+
   const panelManager = new PanelManager(context);
   const syncManager = new SyncManager();
   const variablesProvider = new MvVariablesProvider(context, panelManager);
@@ -83,11 +88,13 @@ export function activate(context: vscode.ExtensionContext) {
         const existing = syncManager.getPendingPair();
         if (!existing) {
           syncManager.startPairing(item.variableName);
+          log("INFO", `Selected "${item.variableName}" for sync pairing.`);
           vscode.window.showInformationMessage(
             `MatrixViewer: selected "${item.variableName}" for sync pairing. Now select the second variable.`
           );
         } else {
           syncManager.completePairing(item.variableName, panelManager);
+          log("INFO", `Synced pair: "${existing}" <-> "${item.variableName}".`);
           vscode.window.showInformationMessage(
             `MatrixViewer: "${existing}" and "${item.variableName}" are now synced.`
           );
@@ -168,18 +175,19 @@ async function visualizeVariable(
   panelManager: PanelManager,
   syncManager: SyncManager
 ): Promise<void> {
-  debugOut.appendLine(`[DEBUG] visualizeVariable called: varName="${varName}"`); // [DEBUG]
-  debugOut.show(true); // [DEBUG]
+  log("DEBUG", `visualizeVariable called: varName="${varName}"`);
+  logOut.show(true);
   const session = vscode.debug.activeDebugSession;
   if (!session) {
     vscode.window.showWarningMessage("MatrixViewer: No active debug session.");
-    debugOut.appendLine(`[DEBUG] No active debug session`); // [DEBUG]
+    log("WARN", "No active debug session.");
     return;
   }
-  debugOut.appendLine(`[DEBUG] session.type="${session.type}" session.id="${session.id}"`); // [DEBUG]
+  log("DEBUG", `session.type="${session.type}" session.id="${session.id}"`);
 
   // Reuse existing panel if already open
   if (panelManager.hasPanel(varName)) {
+    log("DEBUG", `Panel already exists for "${varName}", focusing existing panel.`);
     panelManager.focusPanel(varName);
     return;
   }
@@ -189,10 +197,10 @@ async function visualizeVariable(
     vscode.window.showWarningMessage(
       `MatrixViewer: Unsupported debug session type "${session.type}".`
     );
-    debugOut.appendLine(`[DEBUG] No adapter for session type "${session.type}"`); // [DEBUG]
+    log("WARN", `No adapter for session type "${session.type}".`);
     return;
   }
-  debugOut.appendLine(`[DEBUG] adapter found: ${adapter.constructor.name}`); // [DEBUG]
+  log("DEBUG", `adapter found: ${adapter.constructor.name}`);
 
   let varInfo: Awaited<ReturnType<typeof adapter.getVariableInfo>>;
   try {
@@ -201,20 +209,21 @@ async function visualizeVariable(
     vscode.window.showErrorMessage(
       `MatrixViewer: Failed to inspect "${varName}": ${e}`
     );
-    debugOut.appendLine(`[DEBUG] getVariableInfo threw: ${e}`); // [DEBUG]
+    log("ERROR", `getVariableInfo threw for "${varName}": ${e}`);
     return;
   }
-  debugOut.appendLine(`[DEBUG] varInfo=${JSON.stringify(varInfo)}`); // [DEBUG]
+  log("DEBUG", `varInfo=${JSON.stringify(varInfo)}`);
 
   if (!varInfo) {
     vscode.window.showWarningMessage(
       `MatrixViewer: Cannot resolve variable "${varName}".`
     );
+    log("WARN", `Cannot resolve variable "${varName}".`);
     return;
   }
 
   const vizType = adapter.detectVisualizableType(varInfo);
-  debugOut.appendLine(`[DEBUG] detectVisualizableType → "${vizType}"`); // [DEBUG]
+  log("DEBUG", `detectVisualizableType -> "${vizType}"`);
 
   await vscode.window.withProgress(
     {
@@ -226,31 +235,33 @@ async function visualizeVariable(
       switch (vizType) {
         case "image": {
           const data = await adapter.fetchImageData(session, varName, varInfo!);
-          debugOut.appendLine(`[DEBUG] fetchImageData result: ${data ? "OK" : "null"}`); // [DEBUG]
+          log("DEBUG", `fetchImageData result: ${data ? "OK" : "null"}`);
           if (data) {
             panelManager.openImagePanel(varName, data, context, syncManager);
           } else {
             vscode.window.showWarningMessage(
               `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
             );
+            log("WARN", `Unsupported image data structure for "${varName}".`);
           }
           break;
         }
         case "plot": {
           const data = await adapter.fetchPlotData(session, varName, varInfo!);
-          debugOut.appendLine(`[DEBUG] fetchPlotData result: ${data ? "OK" : "null"}`); // [DEBUG]
+          log("DEBUG", `fetchPlotData result: ${data ? "OK" : "null"}`);
           if (data) {
             panelManager.openPlotPanel(varName, data, context, syncManager);
           } else {
             vscode.window.showWarningMessage(
               `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
             );
+            log("WARN", `Unsupported plot data structure for "${varName}".`);
           }
           break;
         }
         case "pointcloud": {
           const data = await adapter.fetchPointCloudData(session, varName, varInfo!);
-          debugOut.appendLine(`[DEBUG] fetchPointCloudData result: ${data ? "OK" : "null"}`); // [DEBUG]
+          log("DEBUG", `fetchPointCloudData result: ${data ? "OK" : "null"}`);
           if (data) {
             panelManager.openPointCloudPanel(
               varName,
@@ -262,6 +273,7 @@ async function visualizeVariable(
             vscode.window.showWarningMessage(
               `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
             );
+            log("WARN", `Unsupported point cloud data structure for "${varName}".`);
           }
           break;
         }
@@ -269,6 +281,7 @@ async function visualizeVariable(
           vscode.window.showWarningMessage(
             `MatrixViewer: "${varName}" is not a supported visualizable type.`
           );
+          log("WARN", `Unsupported visualizable type for "${varName}": "${vizType}".`);
       }
     }
   );
