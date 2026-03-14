@@ -15,10 +15,18 @@
  *   T[N]  C-style array                 → Plot Viewer  (1D)
  *   T[H][W]                             → Image Viewer (2D)
  *   T[H][W][C]                          → Image Viewer (2D colour)
+ *   pcl::PointCloud<pcl::PointXYZ>      → Point Cloud Viewer (XYZ)
+ *   pcl::PointCloud<pcl::PointXYZRGB>   → Point Cloud Viewer (XYZ + RGB)
+ *   pcl::PointCloud<pcl::PointXYZI>     → Point Cloud Viewer (XYZ + intensity)
+ *
+ *   pcl::PointCloud<pcl::PointXYZ>      → Point Cloud Viewer (XYZ)
+ *   pcl::PointCloud<pcl::PointXYZRGB>    → Point Cloud Viewer (XYZ + RGB)
+ *   pcl::PointCloud<pcl::PointXYZI>      → Point Cloud Viewer (XYZ + intensity)
  *
  * Dependencies (all optional — missing libs are guarded by #ifdef):
  *   OpenCV  ≥ 4.x   (HAVE_OPENCV)
  *   Eigen   ≥ 3.x   (HAVE_EIGEN)
+ *   PCL     ≥ 1.x   (HAVE_PCL)
  */
 
 #include <cmath>
@@ -34,6 +42,11 @@
 
 #ifdef HAVE_EIGEN
 #  include <Eigen/Dense>
+#endif
+
+#ifdef HAVE_PCL
+#  include <pcl/point_cloud.h>
+#  include <pcl/point_types.h>
 #endif
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -171,6 +184,54 @@ int main()
     for (int i = 0; i < N; ++i)
         eigen_vec(i) = std::sin(i * 0.05);
 #endif
+
+    // =========================================================================
+    // pcl::PointCloud  →  Point Cloud Viewer
+    // =========================================================================
+#ifdef HAVE_PCL
+    // PointXYZ — XYZ only (stride 16 B)
+    pcl::PointCloud<pcl::PointXYZ> pcl_xyz;
+    pcl_xyz.reserve(M);
+    for (int i = 0; i < M; ++i) {
+        float phi   = static_cast<float>(i) * 3.14159f / M;
+        float theta = static_cast<float>(i) * 6.28318f / M;
+        pcl::PointXYZ pt;
+        pt.x = std::sin(phi) * std::cos(theta);
+        pt.y = std::sin(phi) * std::sin(theta);
+        pt.z = std::cos(phi);
+        pcl_xyz.push_back(pt);
+    }
+
+    // PointXYZRGB — XYZ + packed RGB (stride 32 B)
+    pcl::PointCloud<pcl::PointXYZRGB> pcl_xyz_rgb;
+    pcl_xyz_rgb.reserve(M);
+    for (int i = 0; i < M; ++i) {
+        float phi   = static_cast<float>(i) * 3.14159f / M;
+        float theta = static_cast<float>(i) * 6.28318f / M;
+        pcl::PointXYZRGB pt;
+        pt.x = std::sin(phi) * std::cos(theta);
+        pt.y = std::sin(phi) * std::sin(theta);
+        pt.z = std::cos(phi);
+        pt.r = static_cast<uint8_t>((std::sin(phi) + 1.0f) * 127.5f);
+        pt.g = static_cast<uint8_t>((std::cos(theta) + 1.0f) * 127.5f);
+        pt.b = static_cast<uint8_t>((std::cos(phi) + 1.0f) * 127.5f);
+        pcl_xyz_rgb.push_back(pt);
+    }
+
+    // PointXYZI — XYZ + intensity (stride 16 B)
+    pcl::PointCloud<pcl::PointXYZI> pcl_xyz_i;
+    pcl_xyz_i.reserve(M);
+    for (int i = 0; i < M; ++i) {
+        float phi   = static_cast<float>(i) * 3.14159f / M;
+        float theta = static_cast<float>(i) * 6.28318f / M;
+        pcl::PointXYZI pt;
+        pt.x         = std::sin(phi) * std::cos(theta);
+        pt.y         = std::sin(phi) * std::sin(theta);
+        pt.z         = std::cos(phi);
+        pt.intensity = static_cast<float>(i) / M;
+        pcl_xyz_i.push_back(pt);
+    }
+#endif  // HAVE_PCL
 
     // =========================================================================
     // BREAKPOINT — open Matrix Viewer panel and click any variable above
