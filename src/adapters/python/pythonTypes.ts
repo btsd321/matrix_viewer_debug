@@ -39,7 +39,7 @@ const PLOT_TYPE_PATTERNS = [
 ];
 const POINTCLOUD_TYPE_PATTERNS = [
     /numpy\.ndarray|\bndarray\b/i,       // Nx3 / Nx6 ndarray — Layer 2 decides
-    /open3d.*PointCloud/i,               // open3d.geometry.PointCloud / open3d.cpu.pybind.geometry.PointCloud
+    /open3d.*PointCloud|\bPointCloud\b/i, // open3d.geometry.PointCloud — DAP returns bare "PointCloud" as type.__name__
 ];
 
 /**
