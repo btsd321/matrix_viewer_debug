@@ -9,7 +9,7 @@ dist/
 .vscode/settings.json
 .vscode/*.code-workspace
 .venv/
-test\test_python\.vscode\launch.json
+test/test_python/.vscode/launch.json
 
 *.db
 *.db-shm
