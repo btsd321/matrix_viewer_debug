@@ -69,7 +69,7 @@ if(MSVC)
     # /Zi  — full PDB debug info
     # /Od  — disable optimisations
     # /RTC1 — runtime checks (Debug only)
-    target_compile_options(demo PRIVATE /Zi /Od /RTC1 /W4)
+    target_compile_options(demo PRIVATE /utf-8 /Zi /Od /RTC1 /W4)
     # Ensure PDB is written even in Debug
     target_link_options(demo PRIVATE /DEBUG)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")

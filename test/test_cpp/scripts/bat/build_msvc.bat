@@ -36,4 +36,4 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [build_msvc] SUCCESS  →  %BUILD_DIR%\Debug\demo.exe
+echo [build_msvc] SUCCESS  ->  %BUILD_DIR%\Debug\demo.exe
