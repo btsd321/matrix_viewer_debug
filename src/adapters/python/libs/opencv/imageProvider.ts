@@ -54,11 +54,12 @@ export class OpenCvImageProvider implements ILibImageProvider {
         let shape: number[];
         let dtype: string;
 
-        if (info.shape && info.dtype) {
+        if (ndarrayExpr === varName && info.shape && info.dtype) {
+            // Already have metadata from Layer-2 detection
             shape = info.shape;
             dtype = info.dtype;
         } else {
-            // Need to query via evaluate
+            // UMat/GpuMat: evaluate the conversion expression to get metadata
             const metaJson = await evaluateExpression(
                 session,
                 `__import__('json').dumps({'shape': list((${ndarrayExpr}).shape), 'dtype': str((${ndarrayExpr}).dtype)})`,
@@ -68,10 +69,8 @@ export class OpenCvImageProvider implements ILibImageProvider {
                 return null;
             }
             try {
-                const meta = JSON.parse(metaJson.replace(/^'|'$/g, "").replace(/"/g, '"')) as {
-                    shape: number[];
-                    dtype: string;
-                };
+                const jsonStr = metaJson.startsWith("'") ? metaJson.slice(1, -1) : metaJson;
+                const meta = JSON.parse(jsonStr) as { shape: number[]; dtype: string };
                 shape = meta.shape;
                 dtype = meta.dtype;
             } catch {
@@ -87,62 +86,24 @@ export class OpenCvImageProvider implements ILibImageProvider {
         // cv2 always stores in BGR order
         const format: ImageFormat = channels === 1 ? "GRAY" : channels === 4 ? "BGRA" : "BGR";
 
-        // ── Fetch raw bytes ───────────────────────────────────────────────────
-        // If ndarrayExpr is just varName, reuse fetchArrayData directly.
-        // Otherwise we evaluate the conversion expression inline.
-        let rawBuffer: Uint8Array | null = null;
-
-        if (ndarrayExpr === varName) {
-            const raw = await fetchArrayData(session, varName, { ...info, shape, dtype });
-            rawBuffer = raw?.buffer ?? null;
-        } else {
-            // Use the converted expression
-            const totalBytes = shape.reduce((a, b) => a * b, 1);
-            const bytesPerEl = bytesPerElementForDtype(dtype);
-            const byteSize = totalBytes * bytesPerEl;
-            const LARGE = 1024 * 1024; // 1 MB
-
-            if (byteSize < LARGE) {
-                const listJson = await evaluateExpression(
-                    session,
-                    `(${ndarrayExpr}).tolist()`,
-                    info.frameId
-                );
-                if (!listJson) {
-                    return null;
-                }
-                try {
-                    const flat = (JSON.parse(listJson) as number[][][]).flat(Infinity) as number[];
-                    rawBuffer = new Uint8Array(flat);
-                } catch {
-                    return null;
-                }
-            } else {
-                const b64 = await evaluateExpression(
-                    session,
-                    `__import__('base64').b64encode((${ndarrayExpr}).tobytes()).decode()`,
-                    info.frameId
-                );
-                if (!b64) {
-                    return null;
-                }
-                const clean = b64.replace(/^['"]|['"]$/g, "");
-                const binary = atob(clean);
-                rawBuffer = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) {
-                    rawBuffer[i] = binary.charCodeAt(i);
-                }
-            }
-        }
-
-        if (!rawBuffer) {
+        // ── Fetch raw bytes via fetchArrayData (small→JSON, large→TCP) ────────
+        // Pass ndarrayExpr as varName so fetchArrayData's buildToBytesExpr wraps
+        // the conversion expression (e.g. `(v).get()`) with ascontiguousarray().
+        const infoForFetch: VariableInfo = {
+            ...info,
+            shape,
+            dtype,
+            typeName: "numpy.ndarray", // treat as plain ndarray for the fetch path
+        };
+        const raw = await fetchArrayData(session, ndarrayExpr, infoForFetch);
+        if (!raw) {
             return null;
         }
 
-        const { dataMin, dataMax } = computeMinMax(rawBuffer, dtype);
+        const { dataMin, dataMax } = computeMinMax(raw.buffer, dtype);
 
         return {
-            b64Bytes: bufferToBase64(rawBuffer),
+            b64Bytes: bufferToBase64(raw.buffer),
             width,
             height,
             channels,
@@ -156,27 +117,3 @@ export class OpenCvImageProvider implements ILibImageProvider {
     }
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
-
-function bytesPerElementForDtype(dtype: string): number {
-    switch (dtype) {
-        case "uint8":
-        case "int8":
-        case "bool":
-            return 1;
-        case "uint16":
-        case "int16":
-        case "float16":
-            return 2;
-        case "uint32":
-        case "int32":
-        case "float32":
-            return 4;
-        case "uint64":
-        case "int64":
-        case "float64":
-            return 8;
-        default:
-            return 4;
-    }
-}
