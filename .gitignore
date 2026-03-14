@@ -10,6 +10,7 @@ dist/
 .vscode/*.code-workspace
 .venv/
 test/test_python/.vscode/launch.json
+c_cpp_properties.json
 
 *.db
 *.db-shm
