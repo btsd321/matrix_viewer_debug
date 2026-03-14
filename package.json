@@ -2,7 +2,7 @@
   "name": "matrix-viewer",
   "displayName": "MatrixViewer Debug",
   "description": "Visualize 1D/2D/3D data structures during debugging — supports Python (numpy, PIL, PyTorch, cv2) and C++ (cv::Mat, Eigen, PCL, std::vector)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "btsd321",
   "license": "MIT",
   "engines": {

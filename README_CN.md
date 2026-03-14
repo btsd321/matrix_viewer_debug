@@ -32,12 +32,14 @@
 
 ## ⚡ 支持类型速查
 
+### Python
+
 | 类别 | 类型 | 可视化方式 |
 | -------------------- | --------------------------------------- | --------------- |
 | **图像（2D）** | `PIL.Image.Image` | 🖼️ 图像查看器 |
+| | `numpy.ndarray` shape `(H, W)` / `(H, W, 3)` / `(H, W, 4)` | 🖼️ 图像查看器 |
 | | `torch.Tensor` shape `(H, W)` / `(C, H, W)` / `(1, C, H, W)` | 🖼️ 图像查看器 |
 | | `cv2.UMat` / `cv2.cuda.GpuMat` | 🖼️ 图像查看器 |
-| | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>` rows>1, cols>2 | 🖼️ 图像查看器 |
 | **点云（3D）** | `numpy.ndarray` shape `(N, 3)` — XYZ | 📊 3D 查看器 |
 | | `numpy.ndarray` shape `(N, 6)` — XYZ + RGB | 📊 3D 查看器 |
 | | `open3d.geometry.PointCloud` | 📊 3D 查看器 |
@@ -47,16 +49,25 @@
 | | 元素为数值的 `list` / `tuple` | 📈 1D 折线图 |
 | | 元素为 2 元素序列的 `list` / `tuple` | 📈 2D 散点图 |
 | | `torch.Tensor`（1D）| 📈 1D 折线图 |
-| | `Eigen::VectorX*` / `Eigen::RowVectorX*` | 📈 1D 折线图 |
+
+### C++
+
+| 类别 | 类型 | 可视化方式 |
+| -------------------- | --------------------------------------- | --------------- |
+| **图像（2D）** | `cv::Mat`（OpenCV）| 🖼️ 图像查看器 |
+| | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>`（rows>1, cols>2）| 🖼️ 图像查看器 |
+| **点云（3D）** | `pcl::PointCloud<PointXYZ>` / `<PointXYZRGB>` / `<PointXYZI>` | 📊 3D 查看器 |
+| | `std::vector<cv::Point3f>` / `std::vector<cv::Point3d>` | 📊 3D 查看器 |
+| | `std::array<cv::Point3f, N>` / `std::array<cv::Point3d, N>` | 📊 3D 查看器 |
+| **曲线（1D/2D）** | `Eigen::VectorX*` / `Eigen::RowVectorX*` | 📈 1D 折线图 |
 | | `Eigen::Matrix<T,N,1>` / `Eigen::Matrix<T,1,N>` | 📈 1D 折线图 |
 | | `Eigen::Matrix<T,N,2>`（N×2 矩阵）| 📈 2D 散点图（列0=X，列1=Y）|
+| | `std::vector<T>` / `std::array<T, N>` / `T[N]`（数值类型）| 📈 1D 折线图 |
 
-> **Eigen 路由规则**：运行时查询 `.rows()` / `.cols()` 决定可视化类型：
+> **Eigen 路由规则**（C++）：运行时查询 `.rows()` / `.cols()` 决定可视化类型：
 > - `cols == 1` 或 `rows == 1` → **1D 折线图**
 > - `cols == 2` → **2D 散点图**（列优先存储：X = 第 0 列，Y = 第 1 列）
 > - `rows > 1` 且 `cols > 2` → **图像**（单通道灰度，自动开启归一化）
-
-> **不支持的维度**（如 `ndarray` shape `(H,W,3)`）会弹出「不支持的数据结构」警告。
 
 ---
 
@@ -75,13 +86,20 @@
 
 ## 🔧 调试器支持
 
+### Python
+
 | 调试器 | Session 类型 | 1D 数据 | 图像 | 点云 | 状态 |
 | --------- | ------------ | ------- | ----- | ----------- | ------ |
 | debugpy | `python` / `debugpy` | ✅ | ✅ | ✅ | **已支持** |
-| Jupyter | `jupyter` | ✅ | ✅ | ✅ | **已支持** |
-| cppdbg / lldb | `cppdbg` / `lldb` | ✅ | ✅ | ✅ | **已支持** |
 
-> Python 支持需要安装 [Python 扩展](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（`ms-python.python`）或兼容 debugpy 的启动配置。
+> 需要安装 [Python 扩展](https://marketplace.visualstudio.com/items?itemName=ms-python.python)（`ms-python.python`）或兼容 debugpy 的启动配置。
+
+### C++
+
+| 调试器 | Session 类型 | 1D 数据 | 图像 | 点云 | 状态 |
+| --------- | ------------ | ------- | ----- | ----------- | ------ |
+| cppdbg | `cppdbg` | ✅ | ✅ | ✅ | **已支持** |
+| CodeLLDB | `lldb` | ✅ | ✅ | ✅ | **已支持** |
 
 ---
 
