@@ -32,12 +32,14 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 
 ## ⚡ Supported Types (Quick Reference)
 
+### Python
+
 | Category | Type | Visualization |
 | -------------------- | --------------------------------------- | --------------- |
 | **Image (2D)** | `PIL.Image.Image` | 🖼️ Image Viewer |
+| | `numpy.ndarray` shape `(H, W)` / `(H, W, 3)` / `(H, W, 4)` | 🖼️ Image Viewer |
 | | `torch.Tensor` shape `(H, W)` / `(C, H, W)` / `(1, C, H, W)` | 🖼️ Image Viewer |
 | | `cv2.UMat` / `cv2.cuda.GpuMat` | 🖼️ Image Viewer |
-| | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>` rows>1, cols>2 | 🖼️ Image Viewer |
 | **Point Cloud (3D)** | `numpy.ndarray` shape `(N, 3)` — XYZ | 📊 3D Viewer |
 | | `numpy.ndarray` shape `(N, 6)` — XYZ + RGB | 📊 3D Viewer |
 | | `open3d.geometry.PointCloud` | 📊 3D Viewer |
@@ -47,11 +49,22 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 | | `list` / `tuple` of numeric values | 📈 1D Chart |
 | | `list` / `tuple` of 2-element seqs | 📈 2D Scatter |
 | | `torch.Tensor` (1D) | 📈 1D Chart |
-| | `Eigen::VectorX*` / `Eigen::RowVectorX*` | 📈 1D Chart |
+
+### C++
+
+| Category | Type | Visualization |
+| -------------------- | --------------------------------------- | --------------- |
+| **Image (2D)** | `cv::Mat` (OpenCV) | 🖼️ Image Viewer |
+| | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>` (rows>1, cols>2) | 🖼️ Image Viewer |
+| **Point Cloud (3D)** | `pcl::PointCloud<PointXYZ>` / `<PointXYZRGB>` / `<PointXYZI>` | 📊 3D Viewer |
+| | `std::vector<cv::Point3f>` / `std::vector<cv::Point3d>` | 📊 3D Viewer |
+| | `std::array<cv::Point3f, N>` / `std::array<cv::Point3d, N>` | 📊 3D Viewer |
+| **Plot (1D/2D)** | `Eigen::VectorX*` / `Eigen::RowVectorX*` | 📈 1D Chart |
 | | `Eigen::Matrix<T,N,1>` / `Eigen::Matrix<T,1,N>` | 📈 1D Chart |
 | | `Eigen::Matrix<T,N,2>` (N×2) | 📈 2D Scatter (col0=X, col1=Y) |
+| | `std::vector<T>` / `std::array<T, N>` / `T[N]` (numeric) | 📈 1D Chart |
 
-> **Eigen routing rules**: query runtime `.rows()` / `.cols()` to decide viewer type:
+> **Eigen routing rules** (C++): query runtime `.rows()` / `.cols()` to decide viewer type:
 > - `cols == 1` or `rows == 1` → **1D line plot**
 > - `cols == 2` → **2D scatter** (column-major storage: X = col 0, Y = col 1)
 > - `rows > 1` and `cols > 2` → **image** (grayscale, auto-normalised)
@@ -73,13 +86,20 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 
 ## 🔧 Debugger Support
 
+### Python
+
 | Debugger | Session Type | 1D Data | Image | Point Cloud | Status |
 | --------- | ------------ | ------- | ----- | ----------- | ------ |
 | debugpy | `python` / `debugpy` | ✅ | ✅ | ✅ | **Supported** |
-| Jupyter | `jupyter` | ✅ | ✅ | ✅ | **Supported** |
-| cppdbg / lldb | `cppdbg` / `lldb` | ✅ | ✅ | ✅ | **Supported** |
 
-> Python support requires the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) (`ms-python.python`) or a compatible debugpy launch config.
+> Requires the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) (`ms-python.python`) or a compatible debugpy launch config.
+
+### C++
+
+| Debugger | Session Type | 1D Data | Image | Point Cloud | Status |
+| --------- | ------------ | ------- | ----- | ----------- | ------ |
+| cppdbg | `cppdbg` | ✅ | ✅ | ✅ | **Supported** |
+| CodeLLDB | `lldb` | ✅ | ✅ | ✅ | **Supported** |
 
 ---
 
