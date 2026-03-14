@@ -139,11 +139,6 @@
           "default": true,
           "description": "Automatically refresh open viewers when stepping through code"
         },
-        "matrixViewer.largeDataThresholdMB": {
-          "type": "number",
-          "default": 1,
-          "description": "Data size threshold (in MB) for switching to Base64 binary transfer instead of JSON"
-        },
         "matrixViewer.maxDisplaySize": {
           "type": "number",
           "default": 50,
