@@ -8,6 +8,15 @@ rem   set "VS_INSTALL_DIR=D:\SoftWare\Microsoft Visual Studio\18\Community"
 rem Leave empty ("") to let CMake auto-detect via vswhere.
 if not defined VS_INSTALL_DIR set "VS_INSTALL_DIR=D:\SoftWare\Microsoft Visual Studio\18\Community"
 
+rem vcpkg toolchain — auto-detected if CMAKE_TOOLCHAIN_FILE env var is set,
+rem otherwise falls back to the path below. Set VCPKG_ROOT to override.
+if not defined VCPKG_ROOT set "VCPKG_ROOT=D:\Library\vcpkg"
+if not defined CMAKE_TOOLCHAIN_FILE (
+    if exist "%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" (
+        set "CMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake"
+    )
+)
+
 setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
 set "SOURCE_DIR=%SCRIPT_DIR%..\.."
@@ -24,7 +33,11 @@ cmake -S "%SOURCE_DIR%" -B "%BUILD_DIR%" ^
     -DWITH_OPENCV=ON ^
     -DWITH_EIGEN=ON ^
     -DWITH_PCL=ON ^
-    "-DCMAKE_GENERATOR_INSTANCE=%VS_INSTALL_DIR%"
+    "-DCMAKE_GENERATOR_INSTANCE=%VS_INSTALL_DIR%" ^
+    "-DCMAKE_TOOLCHAIN_FILE=%CMAKE_TOOLCHAIN_FILE%" ^
+    "-DOpenCV_ROOT=%VCPKG_ROOT%\installed\x64-windows\share\opencv" ^
+    "-DEigen3_DIR=%VCPKG_ROOT%\installed\x64-windows\share\eigen3" ^
+    "-DPCL_DIR=%VCPKG_ROOT%\installed\x64-windows\share\pcl"
 
 if errorlevel 1 (
     echo [build_msvc] CMake configure FAILED. Trying VS 2022...
@@ -36,7 +49,11 @@ if errorlevel 1 (
         -DWITH_OPENCV=ON ^
         -DWITH_EIGEN=ON ^
         -DWITH_PCL=ON ^
-        "-DCMAKE_GENERATOR_INSTANCE=%VS_INSTALL_DIR%"
+        "-DCMAKE_GENERATOR_INSTANCE=%VS_INSTALL_DIR%" ^
+        "-DCMAKE_TOOLCHAIN_FILE=%CMAKE_TOOLCHAIN_FILE%" ^
+        "-DOpenCV_ROOT=%VCPKG_ROOT%\installed\x64-windows\share\opencv" ^
+        "-DEigen3_DIR=%VCPKG_ROOT%\installed\x64-windows\share\eigen3" ^
+        "-DPCL_DIR=%VCPKG_ROOT%\installed\x64-windows\share\pcl"
 )
 
 if errorlevel 1 (
