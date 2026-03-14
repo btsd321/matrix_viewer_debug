@@ -62,6 +62,8 @@ type TreeNode = MvGroupItem | MvVariableItem;
 
 // ── Provider ───────────────────────────────────────────────────────────────
 
+type LogFn = (level: "DEBUG" | "INFO" | "WARN" | "ERROR", msg: string) => void;
+
 export class MvVariablesProvider
     implements vscode.TreeDataProvider<TreeNode> {
     private _onDidChangeTreeData = new vscode.EventEmitter<
@@ -77,7 +79,8 @@ export class MvVariablesProvider
 
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly panelManager: PanelManager
+        private readonly panelManager: PanelManager,
+        private readonly logFn?: LogFn
     ) { }
 
     // ── TreeDataProvider interface ───────────────────────────────────────────
@@ -197,6 +200,17 @@ export class MvVariablesProvider
         }
 
         const rawVars = await adapter.getVariablesInScope(session);
+
+        // DEBUG: log raw type strings from the debug adapter so type-detection
+        // mismatches (e.g. CodeLLDB returning empty/different type for cv::Mat)
+        // are visible in the MatrixViewer output channel.
+        // Label "r2" confirms this version of the code is running.
+        if (this.logFn) {
+            for (const v of rawVars) {
+                this.logFn("DEBUG", `[autoDetect-r2] var="${v.name}" type="${v.type ?? "(empty)"}"`);
+            }
+        }
+
         const newItems: MvVariableItem[] = [];
 
         for (const v of rawVars) {

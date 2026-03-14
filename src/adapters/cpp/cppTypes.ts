@@ -39,6 +39,9 @@ const PLOT_TYPE_PATTERNS = [
     /\bEigen::Vector/,     // Eigen::VectorXf, VectorXd, etc.
     /\bstd::array\b/,
     /\bstd::deque\b/,
+    // C-style 1D numeric arrays: double[128], int[64], etc.
+    // Exclude 2D arrays (T[H][W]) which are handled by IMAGE_TYPE_PATTERNS.
+    /^(?!.*\[\s*\d+\s*\]\s*\[\s*\d+\s*\])[a-zA-Z_][a-zA-Z0-9_ ]*\s*\[\s*\d+\s*\]$/,
 ];
 
 // ── Layer-1 detection ─────────────────────────────────────────────────────

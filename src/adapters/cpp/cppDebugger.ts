@@ -110,19 +110,46 @@ export async function getVariablesInScope(
             variablesReference: localScopeRef,
         });
 
-        return (varsResp?.variables ?? []).map(
-            (v: {
-                name: string;
-                type: string;
-                variablesReference: number;
-                value: string;
-            }) => ({
-                name: v.name,
-                type: v.type ?? "",
-                variablesReference: v.variablesReference,
-                frameId,
+        const raw: { name: string; type: string; variablesReference: number }[] =
+            varsResp?.variables ?? [];
+
+        const context = getEvaluateContext(session);
+
+        // CodeLLDB may omit Variable.type (it is optional per the DAP spec).
+        // For struct/class variables (variablesReference > 0) with an empty type:
+        //   1st try: evaluate request (r.type may carry the type name)
+        //   2nd try: inspect children for the cv::Mat field fingerprint
+        const resolved = await Promise.all(
+            raw.map(async (v) => {
+                let typeName = v.type ?? "";
+                if (!typeName && v.variablesReference > 0) {
+                    try {
+                        const r = await session.customRequest("evaluate", {
+                            expression: v.name,
+                            frameId,
+                            context,
+                        });
+                        typeName = r?.type ?? "";
+                    } catch {
+                        // keep empty string
+                    }
+                }
+                if (!typeName && v.variablesReference > 0) {
+                    typeName = await detectCvMatFromChildren(
+                        session,
+                        v.variablesReference
+                    );
+                }
+                return {
+                    name: v.name,
+                    type: typeName,
+                    variablesReference: v.variablesReference,
+                    frameId,
+                };
             })
         );
+
+        return resolved;
     } catch {
         return [];
     }
@@ -170,6 +197,40 @@ export async function getVariableInfo(
     } catch {
         return null;
     }
+}
+
+// ── cv::Mat children-based type fallback ─────────────────────────────────
+
+// Members guaranteed to exist in every cv::Mat instance.
+const CV_MAT_REQUIRED_FIELDS = new Set(["flags", "dims", "rows", "cols", "data"]);
+
+/**
+ * For debuggers that don't report Variable.type for cv::Mat (e.g. CodeLLDB
+ * on Windows with PDB symbols), inspect the first level of child variables
+ * and check whether their names match the known cv::Mat memory layout.
+ * Returns "cv::Mat" if confident, or "" otherwise.
+ */
+async function detectCvMatFromChildren(
+    session: vscode.DebugSession,
+    variablesReference: number
+): Promise<string> {
+    try {
+        const resp = await session.customRequest("variables", {
+            variablesReference,
+        });
+        const childNames: string[] = (resp?.variables ?? []).map(
+            (c: { name: string }) => c.name
+        );
+        const matchCount = childNames.filter((n) =>
+            CV_MAT_REQUIRED_FIELDS.has(n)
+        ).length;
+        if (matchCount >= 4) {
+            return "cv::Mat";
+        }
+    } catch {
+        // ignore
+    }
+    return "";
 }
 
 // ── Expression evaluation ─────────────────────────────────────────────────

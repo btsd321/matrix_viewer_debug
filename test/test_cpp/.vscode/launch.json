@@ -34,21 +34,30 @@
             "name": "C++ Demo (LLVM / cppdbg + lldb-mi)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build_llvm/demo",
+            "program": "${workspaceFolder}/build_llvm/demo.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "stopAtEntry": false,
-            "MIMode": "lldb"
+            "MIMode": "lldb",
+            "miDebuggerPath": "C:/Program Files/LLVM/bin/lldb-mi.exe",
+            "environment": [
+                {
+                    "name": "PATH",
+                    "value": "D:/Library/vcpkg/installed/x64-windows/debug/bin;C:/Program Files/LLVM/bin;${env:PATH}"
+                }
+            ]
         },
         {
             "name": "C++ Demo (LLVM / CodeLLDB)",
-            "type": "cppdbg",
+            "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build_llvm/demo",
+            "program": "${workspaceFolder}/build_llvm/demo.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "stopAtEntry": false,
-            "MIMode": "lldb"
+            "stopOnEntry": false,
+            "env": {
+                "PATH": "D:/Library/vcpkg/installed/x64-windows/debug/bin;C:/Program Files/LLVM/bin;${env:PATH}"
+            }
         }
     ]
 }

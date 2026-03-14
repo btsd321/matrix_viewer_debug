@@ -22,7 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const panelManager = new PanelManager(context);
     const syncManager = new SyncManager();
-    const variablesProvider = new MvVariablesProvider(context, panelManager);
+    const variablesProvider = new MvVariablesProvider(context, panelManager, log);
 
     // Register the TreeView in the Debug sidebar
     const treeView = vscode.window.createTreeView("matrixViewerPanel", {
