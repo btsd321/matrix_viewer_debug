@@ -4,7 +4,8 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/build_llvm"
+SOURCE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+BUILD_DIR="${SOURCE_DIR}/build_llvm"
 
 # Prefer ninja if available, fall-back to Unix Makefiles
 if command -v ninja &>/dev/null; then
@@ -18,7 +19,7 @@ CC_COMPILER="${CC:-clang}"
 CXX_COMPILER="${CXX:-clang++}"
 
 echo "[build_llvm] Configuring with ${GENERATOR} (${CXX_COMPILER})..."
-cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
+cmake -S "${SOURCE_DIR}" -B "${BUILD_DIR}" \
     -G "${GENERATOR}" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER="${CC_COMPILER}" \

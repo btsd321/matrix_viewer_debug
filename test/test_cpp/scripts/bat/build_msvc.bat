@@ -4,10 +4,11 @@ rem Run from any directory; script locates itself automatically.
 
 setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
-set "BUILD_DIR=%SCRIPT_DIR%build_msvc"
+set "SOURCE_DIR=%SCRIPT_DIR%..\.." 
+set "BUILD_DIR=%SCRIPT_DIR%..\..\build_msvc"
 
 echo [build_msvc] Configuring...
-cmake -S "%SCRIPT_DIR%" -B "%BUILD_DIR%" ^
+cmake -S "%SOURCE_DIR%" -B "%BUILD_DIR%" ^
     -G "Visual Studio 17 2022" -A x64 ^
     -DCMAKE_BUILD_TYPE=Debug ^
     -DWITH_OPENCV=ON ^
@@ -15,7 +16,7 @@ cmake -S "%SCRIPT_DIR%" -B "%BUILD_DIR%" ^
 
 if errorlevel 1 (
     echo [build_msvc] CMake configure FAILED. Trying VS 2019...
-    cmake -S "%SCRIPT_DIR%" -B "%BUILD_DIR%" ^
+    cmake -S "%SOURCE_DIR%" -B "%BUILD_DIR%" ^
         -G "Visual Studio 16 2019" -A x64 ^
         -DCMAKE_BUILD_TYPE=Debug ^
         -DWITH_OPENCV=ON ^
