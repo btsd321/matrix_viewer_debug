@@ -14,6 +14,7 @@ endif()
 option(WITH_OPENCV "Build with OpenCV support" ON)
 option(WITH_EIGEN  "Build with Eigen support"  ON)
 option(WITH_PCL    "Build with PCL support"    ON)
+option(WITH_QT     "Build with Qt5 support"    ON)
 
 set(EXTRA_DEFS)
 set(EXTRA_LIBS)
@@ -74,6 +75,19 @@ if(WITH_EIGEN)
     endif()
 endif()
 
+if(WITH_QT)
+    # Disable Qt meta-object compiler — we don't use Q_OBJECT in this demo
+    set(CMAKE_AUTOMOC OFF)
+    find_package(Qt5 QUIET COMPONENTS Core Gui)
+    if(Qt5_FOUND)
+        message(STATUS "Qt5 ${Qt5_VERSION} found — HAVE_QT enabled")
+        list(APPEND EXTRA_DEFS  HAVE_QT)
+        list(APPEND EXTRA_LIBS  Qt5::Core Qt5::Gui)
+    else()
+        message(WARNING "Qt5 not found — Qt tests will be skipped")
+    endif()
+endif()
+
 # ── Executable ────────────────────────────────────────────────────────────
 add_executable(demo demo.cpp)
 
@@ -109,4 +123,5 @@ message(STATUS "  Compiler:    ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VER
 message(STATUS "  OpenCV:      ${OpenCV_FOUND}")
 message(STATUS "  Eigen3:      ${Eigen3_FOUND}")
 message(STATUS "  PCL:         ${PCL_FOUND}")
+message(STATUS "  Qt5:         ${Qt5_FOUND}")
 message(STATUS "---------------------------------------------------")
