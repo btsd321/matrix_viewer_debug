@@ -28,7 +28,7 @@ import {
     tryGetDataPointer,
 } from "../../debugger";
 import { computeBounds } from "../utils";
-import { isQVectorOf3D, getQContainerSize, getQVectorDataPointer, QtDataPtr } from "./qtUtils";
+import { isQVectorOf3D, getQContainerSize, getQVectorDataPointer, QtDataPtr, warnQtContainerNoSymsOnce, qtSizeCallFailed } from "./qtUtils";
 import { logger } from "../../../../../log/logger";
 
 // QVector3D = { float xp; float yp; float zp; } — 12 bytes, no padding
@@ -85,6 +85,9 @@ export class QtPointCloudProvider implements ILibPointCloudProvider {
             count = await getQContainerSize(session, info.variablesReference!);
         }
         if (count <= 0) {
+            if (await qtSizeCallFailed(session, varName, frameId)) {
+                warnQtContainerNoSymsOnce();
+            }
             logger.warn(`QtPointCloudProvider: size() returned 0 for ${varName}`);
             return null;
         }

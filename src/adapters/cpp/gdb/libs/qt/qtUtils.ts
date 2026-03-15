@@ -11,8 +11,46 @@
  */
 
 import * as vscode from "vscode";
-import { isValidMemoryReference } from "../../debugger";
+import { isValidMemoryReference, evaluateExpression } from "../../debugger";
 import { logger } from "../../../../../log/logger";
+
+// ── No-debug-symbols one-shot warning ────────────────────────────────────
+
+/** Shared guard — fires at most once per extension activation. */
+let _qtContainerNoSymsWarned = false;
+
+/**
+ * Show a one-time warning when Qt container member functions (.size(), .data())
+ * appear unavailable due to missing debug symbols.
+ *
+ * Detection: evaluateExpression("(int)varName.size()") returns null (threw) rather
+ * than "0" (genuinely empty container) — only call this after confirming null.
+ */
+export function warnQtContainerNoSymsOnce(): void {
+    if (_qtContainerNoSymsWarned) { return; }
+    _qtContainerNoSymsWarned = true;
+    const msg =
+        "Qt debug symbols not found. " +
+        "GDB cannot call Qt inline member functions (size(), data(), etc.). " +
+        "Install libqt5gui5-dbgsym (Ubuntu) or compile Qt with debug symbols " +
+        "for more reliable container (QVector/QList/QPolygonF) visualization.";
+    logger.warn(msg);
+    vscode.window.showWarningMessage(msg);
+}
+
+/**
+ * Returns true when the .size() member function call on varName threw an error
+ * (null result → likely no Qt debug symbols), as opposed to returning "0"
+ * which would mean a genuinely empty container.
+ */
+export async function qtSizeCallFailed(
+    session: vscode.DebugSession,
+    varName: string,
+    frameId?: number
+): Promise<boolean> {
+    const raw = await evaluateExpression(session, `(int)${varName}.size()`, frameId);
+    return raw === null;
+}
 
 // ── QImage Format constants ──────────────────────────────────────────────
 // Values match QImage::Format enum defined in qimage.h (stable across Qt5/Qt6).

@@ -44,6 +44,8 @@ import {
     getQContainerSize,
     getQVectorDataPointer,
     QtDataPtr,
+    warnQtContainerNoSymsOnce,
+    qtSizeCallFailed,
 } from "./qtUtils";
 import { logger } from "../../../../../log/logger";
 
@@ -116,6 +118,11 @@ export class QtPlotProvider implements ILibPlotProvider {
             count = await getQContainerSize(session, info.variablesReference!);
         }
         if (count <= 0) {
+            // Distinguish "no debug symbols" (.size() threw → null) from
+            // "genuinely empty container" (.size() returned "0").
+            if (await qtSizeCallFailed(session, varName, frameId)) {
+                warnQtContainerNoSymsOnce();
+            }
             logger.warn(`QtPlotProvider: size() returned 0 for ${varName}`);
             return null;
         }

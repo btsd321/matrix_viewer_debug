@@ -17,3 +17,4 @@ docs\requirements.md
 *.db-shm
 *.db-wal
 docs\requirements.md
+settings.json
