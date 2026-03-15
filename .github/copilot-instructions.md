@@ -29,55 +29,62 @@ src/
 │   ├── IDebugAdapter.ts      # Shared interface: VariableInfo, VisualizableKind, IDebugAdapter
 │   ├── ILibProviders.ts      # Per-library interfaces: ILibImageProvider, ILibPlotProvider, ILibPointCloudProvider
 │   ├── adapterRegistry.ts    # Maps session.type → IDebugAdapter (first-match-wins)
-│   ├── python/               # Python / debugpy / Jupyter adapter
-│   │   ├── pythonDebugger.ts # DAP communication (evaluate, fetchArrayData, getVariablesInScope)
+│   ├── python/               # Python adapter
 │   │   ├── pythonTypes.ts    # Pure type-detection functions (Layer 1 + Layer 2)
-│   │   ├── imageProvider.ts  # Coordinator: delegates to first matching ILibImageProvider
-│   │   ├── plotProvider.ts   # Coordinator: delegates to first matching ILibPlotProvider
-│   │   ├── pointCloudProvider.ts # Coordinator: delegates to first matching ILibPointCloudProvider
-│   │   ├── pythonAdapter.ts  # Implements IDebugAdapter, delegates to coordinators above
-│   │   └── libs/             # Per-library provider implementations
-│   │       ├── utils.ts      # Shared helpers (fetchArrayData wrappers, etc.)
-│   │       ├── numpy/        # numpy.ndarray support (1D plot, Nx2 scatter, Nx3/Nx6 pointcloud)
-│   │       │   ├── imageProvider.ts    # (kept for reference; not registered in image coordinator)
-│   │       │   ├── plotProvider.ts
-│   │       │   └── pointCloudProvider.ts
-│   │       ├── pil/          # PIL.Image support
-│   │       │   └── imageProvider.ts
-│   │       ├── torch/        # torch.Tensor support
-│   │       │   ├── imageProvider.ts
-│   │       │   └── plotProvider.ts
-│   │       ├── open3d/       # open3d.geometry.PointCloud support
-│   │       │   └── pointCloudProvider.ts
-│   │       └── builtins/     # Python built-in types (list, tuple, range)
-│   │           ├── plotProvider.ts
-│   │           └── pointCloudProvider.ts
-│   └── cpp/                  # C++ / GDB (cppdbg) / vsdbg (cppvsdbg) / CodeLLDB (lldb) adapter
+│   │   ├── pythonAdapter.ts  # Implements IDebugAdapter, delegates to debugpy/ coordinators
+│   │   └── debugpy/          # debugpy-specific DAP layer (session.type = "python"/"debugpy")
+│   │       ├── debugger.ts   # DAP communication (evaluate, fetchArrayData, getVariablesInScope)
+│   │       ├── imageProvider.ts  # Coordinator: delegates to first matching ILibImageProvider
+│   │       ├── plotProvider.ts   # Coordinator: delegates to first matching ILibPlotProvider
+│   │       ├── pointCloudProvider.ts # Coordinator: delegates to first matching ILibPointCloudProvider
+│   │       └── libs/             # Per-library provider implementations
+│   │           ├── utils.ts      # Shared helpers (fetchArrayData wrappers, etc.)
+│   │           ├── numpy/        # numpy.ndarray support (1D plot, Nx2 scatter, Nx3/Nx6 pointcloud)
+│   │           │   ├── imageProvider.ts    # (kept for reference; not registered in image coordinator)
+│   │           │   ├── plotProvider.ts
+│   │           │   └── pointCloudProvider.ts
+│   │           ├── pil/          # PIL.Image support
+│   │           │   └── imageProvider.ts
+│   │           ├── torch/        # torch.Tensor support
+│   │           │   ├── imageProvider.ts
+│   │           │   └── plotProvider.ts
+│   │           ├── open3d/       # open3d.geometry.PointCloud support
+│   │           │   └── pointCloudProvider.ts
+│   │           └── builtins/     # Python built-in types (list, tuple, range)
+│   │               ├── plotProvider.ts
+│   │               └── pointCloudProvider.ts
+│   └── cpp/                  # C++ adapter — routes by session.type to per-debugger folders
 │       ├── cppTypes.ts       # Layer-1 type detection (cv::Mat, Eigen, std::vector, pcl, C-arrays)
-│       ├── cppDebugger.ts    # DAP communication (evaluate, readMemory, getVariablesInScope, etc.)
-│       ├── cppAdapter.ts     # Implements IDebugAdapter, delegates to coordinators
-│       ├── imageProvider.ts  # Coordinator: delegates to first matching ILibImageProvider
-│       ├── plotProvider.ts   # Coordinator: delegates to first matching ILibPlotProvider
-│       ├── pointCloudProvider.ts # Coordinator: delegates to first matching ILibPointCloudProvider
-│       └── libs/             # Per-library provider implementations
-│           ├── utils.ts      # Shared helpers (buffer, dtype, stats)
-│           ├── opencv/       # cv::Mat support
-│           │   ├── imageProvider.ts
-│           │   └── matUtils.ts
-│           ├── eigen/        # Eigen::Matrix (TODO)
-│           │   └── plotProvider.ts
-│           ├── pcl/          # pcl::PointCloud (TODO)
-│           │   └── pointCloudProvider.ts
-│           ├── std/          # C++ standard library types
-│           │   ├── stdUtils.ts          # Pure type-detection (std::vector, std::array, C-style arrays, Point3)
-│           │   ├── plotProvider.ts      # std::vector<T>, std::array<T,N>, T[N] → PlotData
-│           │   ├── imageProvider.ts     # 2D/3D std::array, T[H][W], T[H][W][C] → ImageData
-│           │   └── pointCloudProvider.ts # std::vector<Point3f/d>, std::array<Point3f/d,N> → PointCloudData
-│           └── qt/           # Qt5 / Qt6 types
-│               ├── qtUtils.ts           # QImage format enum, qImageLayout, qVectorElementType helpers
-│               ├── imageProvider.ts     # QImage → ImageData (bits() + sizeInBytes/byteCount)
-│               ├── plotProvider.ts      # QVector<T>/QList<T>/QPolygonF/QVector<QVector2D> → PlotData
-│               └── pointCloudProvider.ts # QVector<QVector3D> → PointCloudData
+│       ├── cppAdapter.ts     # Implements IDebugAdapter; routes to gdb/ | codelldb/ | cppvsdbg/
+│       ├── shared/
+│       │   ├── debuggerBase.ts   # Shared DAP utilities (getCurrentFrameId, readMemoryChunked, …)
+│       │   └── utils.ts          # Shared buffer/dtype/stats helpers (used by all debugger libs/)
+│       ├── libs/
+│       │   └── (empty — utils.ts moved to shared/)
+│       ├── gdb/              # GDB (session.type = "cppdbg") — (long long) casts, "repl" context
+│       │   ├── debugger.ts   # GDB-specific evaluate / getVariablesInScope / pointer expressions
+│       │   ├── imageProvider.ts  # Coordinator for GDB image providers
+│       │   ├── plotProvider.ts   # Coordinator for GDB plot providers
+│       │   ├── pointCloudProvider.ts # Coordinator for GDB point cloud providers
+│       │   └── libs/
+│       │   ├── utils.ts      # Re-exports ../../shared/utils
+│       │       ├── opencv/   ├── eigen/   ├── pcl/   ├── std/   └── qt/  # (same layout as cppvsdbg/)
+│       ├── cppvsdbg/         # vsdbg (session.type = "cppvsdbg") — MSVC, (long long) casts
+│       │   ├── debugger.ts
+│       │   ├── imageProvider.ts
+│       │   ├── plotProvider.ts
+│       │   ├── pointCloudProvider.ts
+│       │   └── libs/
+│       │       ├── utils.ts      # Re-exports ../../shared/utils
+│       │       ├── opencv/   ├── eigen/   ├── pcl/   ├── std/   └── qt/
+│       └── codelldb/         # CodeLLDB (session.type = "lldb") — bare pointers, "watch" context
+│           ├── debugger.ts
+│           ├── imageProvider.ts
+│           ├── plotProvider.ts
+│           ├── pointCloudProvider.ts
+│           └── libs/
+│               ├── utils.ts      # Re-exports ../../shared/utils
+│               ├── opencv/   ├── eigen/   ├── pcl/   ├── std/   └── qt/
 ├── viewers/
 │   └── viewerTypes.ts        # Language-agnostic display data contracts (ImageData, PlotData, PointCloudData)
 ├── utils/
@@ -143,9 +150,11 @@ media/                        # Static front-end assets (served by webviews)
 - `adapters/ILibProviders.ts` → **interface only**: `ILibImageProvider`, `ILibPlotProvider`, `ILibPointCloudProvider`. No logic.
 - `adapters/adapterRegistry.ts` → registry lookup only; no data fetching.
 - `adapters/<lang>/<lang>Types.ts` → **pure functions only**, no VS Code API, no `async`.
-- `adapters/<lang>/<lang>Debugger.ts` → all DAP communication; no UI, no panel management.
-- `adapters/<lang>/libs/<libName>/*Provider.ts` → implements one `ILib*Provider`; `canHandle()` + one `fetch*Data()`. Pure data fetching; never UI.
-- `adapters/<lang>/*Provider.ts` (coordinators) → iterate `LIB_*_PROVIDERS`; delegate to first `canHandle()` match; return to language adapter.
+- `adapters/cpp/shared/debuggerBase.ts` → shared DAP utilities with NO debugger-type branching.
+- `adapters/cpp/<debugger>/debugger.ts` → debugger-specific DAP communication (evaluate context, pointer expressions); no UI.
+- `adapters/python/debugpy/debugger.ts` → Python/debugpy DAP communication; no UI.
+- `adapters/<lang>/<debugger>/libs/<libName>/*Provider.ts` → implements one `ILib*Provider`; `canHandle()` + one `fetch*Data()`. Pure data fetching; never UI.
+- `adapters/<lang>/<debugger>/*Provider.ts` (coordinators) → iterate providers list; delegate to first `canHandle()` match; return to language adapter.
 - `viewers/viewerTypes.ts` → **plain data contracts only**; no logic, no imports.
 - `*Webview.ts` → HTML string generation only; no data fetching.
 - `panelManager.ts` → panel lifecycle + refresh via `IDebugAdapter`; no language-specific code.
@@ -155,19 +164,26 @@ media/                        # Static front-end assets (served by webviews)
 Every file inside `adapters/<lang>/libs/` must obey the following placement rules.
 **Violating these rules is a bug — fix it before committing.**
 
-#### `adapters/<lang>/libs/utils.ts` — cross-library shared utilities only
+#### C++ shared utilities — `adapters/cpp/shared/utils.ts`
 
-Put a function here **only if** it is used by two or more different `<libName>/` folders.
+For the **C++ adapter**, cross-library helpers live in `adapters/cpp/shared/utils.ts` (alongside `debuggerBase.ts`), not in `libs/utils.ts`.
+Each per-debugger `{debugger}/libs/utils.ts` is a thin re-export bridge: `export * from "../../shared/utils"`.
+
+Put a function in `shared/utils.ts` **only if** it is used by two or more different `<libName>/` folders.
 Allowed content:
 - Buffer conversion helpers (`typedViewOf`, `bufferToBase64`, `typedBufferToNumbers`)
 - Generic stats helpers (`computeMinMax`, `computeStats`, `computeBounds`)
 - Shape helpers (`resolveHWC`)
 - Dtype / depth conversion that is not tied to a specific library (`cvDepthToDtype`, `cppTypeToCvDepth`)
 
-**Forbidden** in `libs/utils.ts`:
+**Forbidden** in `shared/utils.ts`:
 - Any type-detection logic specific to one library (e.g. `isMat`, `isPoint3Vector`)
 - Any DAP communication (`session.customRequest`, `evaluateExpression`, etc.)
 - Any function that only serves one `<libName>/` folder
+
+#### `adapters/python/debugpy/libs/utils.ts` — Python cross-library shared utilities only
+
+Same rules as above but scoped to Python libs.
 
 #### `adapters/<lang>/libs/<libName>/` — library-specific code only
 
@@ -181,14 +197,14 @@ Every file inside a named library folder (`opencv/`, `numpy/`, `pil/`, `torch/`,
 | `<libName>/matUtils.ts` (or similar) | Helper types, interfaces, and functions **exclusive** to this library (e.g. `MatInfo`, `getMatInfoFromVariables` for OpenCV; `EigenInfo` for Eigen) |
 
 **Forbidden** in a `<libName>/` file:
-- Functions that are reusable across multiple libraries (move them to `libs/utils.ts`)
+- Functions that are reusable across multiple libraries (move them to `shared/utils.ts` for C++, or `libs/utils.ts` for Python)
 - DAP communication helpers that are not library-specific (move them to `<lang>Debugger.ts`)
 
 #### Decision guide: where does this function belong?
 
 ```
 Is the function used by more than one libName/ folder?
-  YES → libs/utils.ts
+  YES → shared/utils.ts  (C++) / libs/utils.ts  (Python)
   NO  →
     Is it DAP communication (customRequest, evaluate, readMemory)?
       YES →
@@ -202,16 +218,16 @@ Is the function used by more than one libName/ folder?
 
 | Function / Type | Correct location |
 |-----------------|-----------------|
-| `getBytesPerElement`, `bufferToBase64`, `computeStats` | `libs/utils.ts` |
-| `cvDepthToDtype`, `cppTypeToCvDepth` | `libs/utils.ts` |
+| `getBytesPerElement`, `bufferToBase64`, `computeStats` | `shared/utils.ts` |
+| `cvDepthToDtype`, `cppTypeToCvDepth` | `shared/utils.ts` |
 | `MatInfo`, `getMatInfoFromVariables`, `getMatInfoFromEvaluate` | `libs/opencv/matUtils.ts` |
 | `OpenCvImageProvider` (implements `ILibImageProvider`) | `libs/opencv/imageProvider.ts` |
 | `isBasicNumericType`, `is1DVector`, `is2DStdArray`, `isPoint3Vector` | `libs/std/stdUtils.ts` |
 | `StdPlotProvider`, `StdImageProvider`, `StdPointCloudProvider` | `libs/std/*Provider.ts` |
 | `EigenPlotProvider` (`evalEigenDim`, `getEigenDataPointer` as private helpers) | `libs/eigen/plotProvider.ts` |
 | `PclPointCloudProvider` | `libs/pcl/pointCloudProvider.ts` |
-| `isValidMemoryReference`, `readMemoryChunked`, `getCurrentFrameId`, `getContainerSize` | `cppDebugger.ts` |
-| `build2DDataPointerExpressions`, `build3DDataPointerExpressions` | `cppDebugger.ts` |
+| `isValidMemoryReference`, `readMemoryChunked`, `getCurrentFrameId` | `shared/debuggerBase.ts` |
+| `getContainerSize`, `build2DDataPointerExpressions`, `build3DDataPointerExpressions` | `{debugger}/debugger.ts` (gdb/cppvsdbg/codelldb) |
 
 ### Front-end JS (media/)
 
@@ -233,13 +249,16 @@ Is the function used by more than one libName/ folder?
 
 ### Add support for a new library (e.g. open3d for Python, or PCL for C++)
 
-1. Create `src/adapters/<lang>/libs/<libName>/imageProvider.ts` (and/or `plotProvider.ts`, `pointCloudProvider.ts`).
-2. Implement `ILibImageProvider` / `ILibPlotProvider` / `ILibPointCloudProvider` from `src/adapters/ILibProviders.ts`.
+**Python**: Create `src/adapters/python/debugpy/libs/<libName>/*Provider.ts` and append to the coordinator in `src/adapters/python/debugpy/{image,plot,pointCloud}Provider.ts`.
+
+**C++**: Create the library provider in **each** applicable debugger folder: `src/adapters/cpp/{gdb,cppvsdbg,codelldb}/libs/<libName>/*Provider.ts` — using only the expressions native to that debugger. Append to coordinator in `src/adapters/cpp/{debugger}/{image,plot,pointCloud}Provider.ts`.
+
+For both:
+1. Implement `ILibImageProvider` / `ILibPlotProvider` / `ILibPointCloudProvider` from `src/adapters/ILibProviders.ts`.
    - `canHandle(typeName)` — return `true` for the type strings this library produces.
    - `fetch*Data(session, varName, info)` — fetch and return the typed data object.
-3. Append a new instance to `LIB_IMAGE_PROVIDERS` (etc.) in the coordinator `src/adapters/<lang>/imageProvider.ts`.
-4. Add type-name patterns to `<lang>Types.ts` so Layer-1 quick detection recognises the new type.
-5. **Tests** — add a unit test in `src/test/`.
+2. Add type-name patterns to `<lang>Types.ts` so Layer-1 quick detection recognises the new type.
+3. **Tests** — add a unit test in `src/test/`.
 
 ### Add support for a new language (e.g. Rust, Java)
 
@@ -252,7 +271,7 @@ Is the function used by more than one libName/ folder?
 
 ### Add support for a new Python type in an existing library
 
-1. **`src/adapters/python/libs/<libName>/imageProvider.ts`** (or `plotProvider.ts` / `pointCloudProvider.ts`) — add or extend the `fetch*Data` implementation.
+1. **`src/adapters/python/debugpy/libs/<libName>/imageProvider.ts`** (or `plotProvider.ts` / `pointCloudProvider.ts`) — add or extend the `fetch*Data` implementation.
 2. **`src/adapters/python/pythonTypes.ts`** — add a pattern to `IMAGE_TYPE_PATTERNS`, `PLOT_TYPE_PATTERNS`, or `POINTCLOUD_TYPE_PATTERNS` so Layer-1 detection recognises it.
 3. **Tests** — add a unit test in `src/test/`.
 

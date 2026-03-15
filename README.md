@@ -159,20 +159,24 @@ npm run compile
 
 ## 🏗️ Architecture Overview
 
-The extension uses a two-level provider hierarchy so that adding a new library or a new language never requires touching existing code:
+The extension uses a three-level provider hierarchy so that adding a new library or a new language never requires touching existing code:
 
 ```
-IDebugAdapter          ← one implementation per language (Python, C++, …)
-  └─ *Provider (coordinator)   ← one coordinator per viewer type (image / plot / pointCloud)
-       └─ ILib*Provider (libs/)  ← one file per third-party library
-            numpy/imageProvider.ts
-            pil/imageProvider.ts
-            … open3d/pointCloudProvider.ts (future)
+IDebugAdapter                    ← one implementation per language (Python, C++, …)
+  └─ per-debugger layer          ← C++: gdb/ | codelldb/ | cppvsdbg/
+       └─ *Provider (coordinator)  ← one coordinator per viewer type (image / plot / pointCloud)
+            └─ ILib*Provider (libs/)  ← one file per third-party library
+                 opencv/imageProvider.ts
+                 eigen/plotProvider.ts
+                 pcl/pointCloudProvider.ts …
 ```
+
+The **per-debugger layer** ensures that GDB, CodeLLDB, and vsdbg expressions are completely isolated — no runtime `if (isLLDB)` branching inside library providers.
 
 | What to add | Where to add it |
 |---|---|
-| New **library** (e.g. open3d) | `src/adapters/<lang>/libs/<libName>/` |
+| New **library for Python** (e.g. open3d) | `src/adapters/python/debugpy/libs/<libName>/` |
+| New **library for C++** (e.g. a new OpenCV wrapper) | `src/adapters/cpp/{gdb,codelldb,cppvsdbg}/libs/<libName>/` |
 | New **language** (e.g. Rust) | `src/adapters/<lang>/` + register in `adapterRegistry.ts` |
 
 ---

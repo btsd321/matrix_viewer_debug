@@ -345,21 +345,24 @@ Webview 渲染
 - [ ] Jupyter Notebook 调试支持
 
 ### Phase 5：C++ 适配器
-- [x] `cppAdapter.ts` 实现 `getVariablesInScope` / `fetchImageData` / `fetchPlotData` / `fetchPointCloudData`
-- [x] `cppDebugger.ts` 实现 `getContainerSize` / `build2DDataPointerExpressions` / `build3DDataPointerExpressions`
-- [x] `cv::Mat` 图像数据获取（通过 `libs/opencv/imageProvider.ts`）
-- [x] `std::vector<T>` / `std::array<T,N>` / `T[N]` 曲线数据获取（通过 `libs/std/plotProvider.ts`）
-- [x] 2D/3D `std::array` 和 C-style array 图像数据获取（通过 `libs/std/imageProvider.ts`）
-- [x] `std::vector<cv::Point3f/d>` / `std::array<cv::Point3f/d,N>` 点云数据获取（通过 `libs/std/pointCloudProvider.ts`）
-- [x] `Eigen::Matrix` / `Eigen::Array` / `Eigen::VectorX` 曲线数据获取（`libs/eigen/plotProvider.ts`）
+- [x] `cppAdapter.ts` 实现 `getVariablesInScope` / `fetchImageData` / `fetchPlotData` / `fetchPointCloudData`（按 session.type 路由到 `gdb/` / `codelldb/` / `cppvsdbg/`）
+- [x] `shared/debuggerBase.ts` — 共享 DAP 工具（`getCurrentFrameId` / `readMemoryChunked` / `parseSizeFromValue`）
+- [x] `gdb/debugger.ts` — GDB（cppdbg）专用：`(long long)` 类型转换，`repl` context
+- [x] `cppvsdbg/debugger.ts` — vsdbg（cppvsdbg）专用：同 GDB 表达式，独立演化
+- [x] `codelldb/debugger.ts` — CodeLLDB（lldb）专用：裸指针，`watch` context，STL 内部字段回退
+- [x] `cv::Mat` 图像数据获取（各 `{debugger}/libs/opencv/imageProvider.ts`）
+- [x] `std::vector<T>` / `std::array<T,N>` / `T[N]` 曲线数据获取（各 `{debugger}/libs/std/plotProvider.ts`）
+- [x] 2D/3D `std::array` 和 C-style array 图像数据获取（各 `{debugger}/libs/std/imageProvider.ts`）
+- [x] `std::vector<cv::Point3f/d>` / `std::array<cv::Point3f/d,N>` 点云数据获取（各 `{debugger}/libs/std/pointCloudProvider.ts`）
+- [x] `Eigen::Matrix` / `Eigen::Array` / `Eigen::VectorX` 曲线数据获取（各 `{debugger}/libs/eigen/plotProvider.ts`）
   - `cols==1` 或 `rows==1` → 1D 折线图
   - `cols==2` → 2D 散点图（Eigen 列优先：X=col0, Y=col1）
-- [x] `Eigen::Matrix` / `Eigen::Array` (rows>1, cols>2) 图像数据获取（`libs/eigen/imageProvider.ts`）
-- [x] `pcl::PointCloud<PointXYZ/XYZRGB/XYZRGBA/XYZI>` 点云数据获取（`libs/pcl/pointCloudProvider.ts`）
+- [x] `Eigen::Matrix` / `Eigen::Array` (rows>1, cols>2) 图像数据获取（各 `{debugger}/libs/eigen/imageProvider.ts`）
+- [x] `pcl::PointCloud<PointXYZ/XYZRGB/XYZRGBA/XYZI>` 点云数据获取（各 `{debugger}/libs/pcl/pointCloudProvider.ts`）
 
 ### Phase 6：Qt5 / Qt6 C++ 类型支持
 
-> 所有实现位于 `src/adapters/cpp/libs/qt/`，兼容 Qt5 与 Qt6。
+> 所有实现位于各 `src/adapters/cpp/{gdb,codelldb,cppvsdbg}/libs/qt/`，兼容 Qt5 与 Qt6。
 
 #### 类型检测（`cppTypes.ts`）
 - [x] Layer-1 识别 `QImage`（类型字符串匹配）
@@ -418,36 +421,40 @@ Webview 渲染
 | `src/adapters/IDebugAdapter.ts` | ✅ | 统一适配器接口定义 |
 | `src/adapters/ILibProviders.ts` | ✅ | 三方库统一接口（ILibImageProvider / ILibPlotProvider / ILibPointCloudProvider）|
 | `src/adapters/adapterRegistry.ts` | ✅ | session.type → 适配器 注册中心 |
-| `src/adapters/python/pythonDebugger.ts` | ✅ | DAP 通信：evaluate / fetchArrayData（JSON + Base64）|
+| `src/adapters/python/debugpy/debugger.ts` | ✅ | DAP 通信：evaluate / fetchArrayData（JSON + Base64）|
 | `src/adapters/python/pythonTypes.ts` | ✅ | 两层类型检测纯函数 |
-| `src/adapters/python/imageProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibImageProvider |
-| `src/adapters/python/plotProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibPlotProvider |
-| `src/adapters/python/pointCloudProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibPointCloudProvider |
-| `src/adapters/python/pythonAdapter.ts` | ✅ | 实现 IDebugAdapter，委托给分发器 |
-| `src/adapters/python/libs/utils.ts` | ✅ | 公用辅助函数 |
-| `src/adapters/python/libs/numpy/imageProvider.ts` | ✅ | ndarray / cv2.Mat 图像获取 |
-| `src/adapters/python/libs/numpy/plotProvider.ts` | ✅ | ndarray 1D 曲线获取 |
-| `src/adapters/python/libs/numpy/pointCloudProvider.ts` | ✅ | ndarray (N,3)/(N,6) 点云获取 |
-| `src/adapters/python/libs/pil/imageProvider.ts` | ✅ | PIL.Image 图像获取 |
-| `src/adapters/python/libs/torch/imageProvider.ts` | ✅ | torch.Tensor 图像获取 |
-| `src/adapters/python/libs/torch/plotProvider.ts` | ✅ | torch.Tensor 1D 曲线获取 |
-| `src/adapters/python/libs/builtins/plotProvider.ts` | ✅ | list / tuple / range 曲线获取 |
-| `src/adapters/python/libs/builtins/pointCloudProvider.ts` | ✅ | list of (x,y,z) 点云获取 |
+| `src/adapters/python/debugpy/imageProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibImageProvider |
+| `src/adapters/python/debugpy/plotProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibPlotProvider |
+| `src/adapters/python/debugpy/pointCloudProvider.ts` | ✅ | 分发器：委托给首个 canHandle() 匹配的 ILibPointCloudProvider |
+| `src/adapters/python/pythonAdapter.ts` | ✅ | 实现 IDebugAdapter，委托给 debugpy/ 分发器 |
+| `src/adapters/python/debugpy/libs/utils.ts` | ✅ | 公用辅助函数 |
+| `src/adapters/python/debugpy/libs/numpy/imageProvider.ts` | ✅ | ndarray / cv2.Mat 图像获取 |
+| `src/adapters/python/debugpy/libs/numpy/plotProvider.ts` | ✅ | ndarray 1D 曲线获取 |
+| `src/adapters/python/debugpy/libs/numpy/pointCloudProvider.ts` | ✅ | ndarray (N,3)/(N,6) 点云获取 |
+| `src/adapters/python/debugpy/libs/pil/imageProvider.ts` | ✅ | PIL.Image 图像获取 |
+| `src/adapters/python/debugpy/libs/torch/imageProvider.ts` | ✅ | torch.Tensor 图像获取 |
+| `src/adapters/python/debugpy/libs/torch/plotProvider.ts` | ✅ | torch.Tensor 1D 曲线获取 |
+| `src/adapters/python/debugpy/libs/builtins/plotProvider.ts` | ✅ | list / tuple / range 曲线获取 |
+| `src/adapters/python/debugpy/libs/builtins/pointCloudProvider.ts` | ✅ | list of (x,y,z) 点云获取 |
 | `src/adapters/cpp/cppTypes.ts` | ✅ | Layer-1 C++ 类型检测（cv::Mat / Eigen / std::vector / std::array / C-style array / Point3 向量 / pcl）|
-| `src/adapters/cpp/cppDebugger.ts` | ✅ | DAP 通信：evaluate / readMemoryChunked / getContainerSize / build2D/3DDataPointerExpressions |
-| `src/adapters/cpp/cppAdapter.ts` | ✅ | 实现 IDebugAdapter，委托给三个协调器 |
-| `src/adapters/cpp/imageProvider.ts` | ✅ | 图像分发器（OpenCvImageProvider + StdImageProvider）|
-| `src/adapters/cpp/plotProvider.ts` | ✅ | 曲线分发器（EigenPlotProvider + StdPlotProvider）|
-| `src/adapters/cpp/pointCloudProvider.ts` | ✅ | 点云分发器（PclPointCloudProvider + StdPointCloudProvider）|
-| `src/adapters/cpp/libs/utils.ts` | ✅ | 跨库公用辅助函数 |
-| `src/adapters/cpp/libs/opencv/imageProvider.ts` | ✅ | cv::Mat 图像获取（LLDB / GDB / vsdbg 三路径）|
-| `src/adapters/cpp/libs/opencv/matUtils.ts` | ✅ | MatInfo 类型及 getMatInfoFromVariables / getMatInfoFromEvaluate |
-| `src/adapters/cpp/libs/std/stdUtils.ts` | ✅ | STL / C-style array / Point3 纯函数类型检测 |
-| `src/adapters/cpp/libs/std/plotProvider.ts` | ✅ | std::vector / std::array / T[N] 1D 曲线获取 |
-| `src/adapters/cpp/libs/std/imageProvider.ts` | ✅ | 2D/3D std::array 和 C-style array 图像获取 |
-| `src/adapters/cpp/libs/std/pointCloudProvider.ts` | ✅ | std::vector / std::array of cv::Point3f/d 点云获取 |
-| `src/adapters/cpp/libs/eigen/plotProvider.ts` | ✅ | Eigen::Matrix/Array/VectorX 曲线获取（rows()/cols()/data() 路径）|
-| `src/adapters/cpp/libs/pcl/pointCloudProvider.ts` | ✅ | pcl::PointCloud<PointXYZ/RGB/RGBA/I> 点云获取（points.data() 路径）|
+| `src/adapters/cpp/shared/debuggerBase.ts` | ✅ | 共享 DAP 工具（getCurrentFrameId / readMemoryChunked / parseSizeFromValue）|
+| `src/adapters/cpp/shared/utils.ts` | ✅ | 跨库公用辅助函数（buffer / dtype / stats）|
+| `src/adapters/cpp/cppAdapter.ts` | ✅ | 实现 IDebugAdapter，按 session.type 路由到各调试器 |
+| `src/adapters/cpp/gdb/debugger.ts` | ✅ | GDB 专用 DAP 通信（repl context，(long long) 转换，getContainerSize）|
+| `src/adapters/cpp/gdb/imageProvider.ts` | ✅ | GDB 图像分发器 |
+| `src/adapters/cpp/gdb/plotProvider.ts` | ✅ | GDB 曲线分发器 |
+| `src/adapters/cpp/gdb/pointCloudProvider.ts` | ✅ | GDB 点云分发器 |
+| `src/adapters/cpp/gdb/libs/{opencv,eigen,pcl,std,qt}/` | ✅ | GDB 各库提供器（仅含 GDB 路径）|
+| `src/adapters/cpp/cppvsdbg/debugger.ts` | ✅ | vsdbg 专用 DAP 通信 |
+| `src/adapters/cpp/cppvsdbg/imageProvider.ts` | ✅ | vsdbg 图像分发器 |
+| `src/adapters/cpp/cppvsdbg/plotProvider.ts` | ✅ | vsdbg 曲线分发器 |
+| `src/adapters/cpp/cppvsdbg/pointCloudProvider.ts` | ✅ | vsdbg 点云分发器 |
+| `src/adapters/cpp/cppvsdbg/libs/{opencv,eigen,pcl,std,qt}/` | ✅ | vsdbg 各库提供器（仅含 MSVC 路径）|
+| `src/adapters/cpp/codelldb/debugger.ts` | ✅ | CodeLLDB 专用 DAP 通信（watch context，裸指针，STL 内部字段回退）|
+| `src/adapters/cpp/codelldb/imageProvider.ts` | ✅ | CodeLLDB 图像分发器 |
+| `src/adapters/cpp/codelldb/plotProvider.ts` | ✅ | CodeLLDB 曲线分发器 |
+| `src/adapters/cpp/codelldb/pointCloudProvider.ts` | ✅ | CodeLLDB 点云分发器 |
+| `src/adapters/cpp/codelldb/libs/{opencv,eigen,pcl,std,qt}/` | ✅ | CodeLLDB 各库提供器（仅含 LLDB 路径）|
 | `src/viewers/viewerTypes.ts` | ✅ | 语言无关统一展示数据类型 |
 | `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新、sync broadcast（使用 IDebugAdapter）|
 | `src/utils/syncManager.ts` | ✅ | idle → waiting → paired 状态机 |

@@ -159,21 +159,25 @@ npm run compile
 
 ## 🏗️ 架构说明
 
-扩展采用两层 Provider 层级结构，新增库或语言品级无需修改已有代码：
+扩展采用三层 Provider 层级结构，新增库或语言无需修改已有代码：
 
 ```
-IDebugAdapter             ← 每种语言一个实现（Python、C++、…）
-  └─ *Provider（分发器）      ← 每种显示类型一个（image / plot / pointCloud）
-       └─ ILib*Provider（libs/）  ← 每个三方库一个文件
-            numpy/imageProvider.ts
-            pil/imageProvider.ts
-            … open3d/pointCloudProvider.ts（未来）
+IDebugAdapter                    ← 每种语言一个实现（Python、C++、…）
+  └─ 调试器专属层                   ← C++：gdb/ | codelldb/ | cppvsdbg/
+       └─ *Provider（分发器）         ← 每种显示类型一个（image / plot / pointCloud）
+            └─ ILib*Provider（libs/）  ← 每个三方库一个文件
+                 opencv/imageProvider.ts
+                 eigen/plotProvider.ts
+                 pcl/pointCloudProvider.ts …
 ```
+
+**调试器专属层**确保 GDB、CodeLLDB、vsdbg 的表达式完全隔离——库 Provider 内部不再有 `if (isLLDB)` 等运行时分支。
 
 | 添加内容 | 在哪里添加 |
 |---|---|
-| 新库（如 open3d） | `src/adapters/<lang>/libs/<libName>/` |
-| 新语言（如 Rust） | `src/adapters/<lang>/` + 在 `adapterRegistry.ts` 中注册 |
+| 新 **Python 库**（如 open3d）| `src/adapters/python/debugpy/libs/<libName>/` |
+| 新 **C++ 库**（如新的 OpenCV 封装）| `src/adapters/cpp/{gdb,codelldb,cppvsdbg}/libs/<libName>/` |
+| 新**语言**（如 Rust）| `src/adapters/<lang>/` + 在 `adapterRegistry.ts` 中注册 |
 
 ---
 
