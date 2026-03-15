@@ -8,7 +8,7 @@
 
 [English](README.md) | [中文](README_CN.md)
 
-A Visual Studio Code extension for visualizing 1D/2D/3D data structures during debugging. Supports **Python** (debugpy) and **C++** (cppdbg / lldb).
+A Visual Studio Code extension for visualizing 1D/2D/3D data structures during debugging. Supports **Python** (debugpy) and **C++** (GDB / vsdbg / CodeLLDB).
 
 **Inspired by [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp) and [Image Watch](https://marketplace.visualstudio.com/items?itemName=VisualCPPTeam.ImageWatch2022) for Visual Studio.**
 
@@ -96,8 +96,11 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 
 | Debugger | Session Type | 1D Data | Image | Point Cloud | Status |
 | --------- | ------------ | ------- | ----- | ----------- | ------ |
-| cppdbg | `cppdbg` | ✅ | ✅ | ✅ | **Supported** |
+| GDB | `cppdbg` | ✅ | ✅ | ✅ | **Supported** |
+| vsdbg | `cppvsdbg` | ✅ | ✅ | ✅ | **Supported** |
 | CodeLLDB | `lldb` | ✅ | ✅ | ✅ | **Supported** |
+
+> **vsdbg (cppvsdbg)**: Requires Visual Studio 2019+. Build with [`build_msvc.bat`](test/test_cpp/scripts/bat/build_msvc.bat). For the best variable detection coverage (especially `cv::Mat`), LLVM + CodeLLDB is recommended.
 
 ---
 

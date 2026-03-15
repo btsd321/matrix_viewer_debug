@@ -45,7 +45,7 @@
 |----------|----------|--------------|-------|
 | Clang/LLVM | CodeLLDB | `lldb` | Requires `-gdwarf-4 -fstandalone-debug` on Windows |
 | GCC | cppdbg + gdb | `cppdbg` | Standard DWARF, works out of the box |
-| MSVC | cppdbg + vsdbg | `cppdbg` | Limited type inspection; full support requires DWARF |
+| MSVC | cppvsdbg | `cppvsdbg` | Requires Visual Studio 2019+; build with `build_msvc.bat` |
 
 > **Windows + LLVM + CodeLLDB is the recommended combination.**  
 > LLDB has limited PDB (CodeView) support; building with DWARF debug info is required
@@ -90,10 +90,28 @@ cmake -DCMAKE_BUILD_TYPE=Debug ..
 make -j$(nproc)
 ```
 
-### MSVC + cppdbg (Windows)
+### MSVC + cppvsdbg (Windows)
 
-Build in Debug configuration from Visual Studio or `cmake --build . --config Debug`.  
-Type detection works for simple types; `cv::Mat` and other complex types may show limited info.
+Use the `build_msvc.bat` script:
+
+```bat
+test\test_cpp\scripts\bat\build_msvc.bat
+```
+
+This configures and builds with Visual Studio (2022 or 2024), producing `build_msvc/Debug/demo.exe`.
+
+Or build manually:
+
+```powershell
+cmake -S . -B build_msvc -G "Visual Studio 17 2022" -A x64 `
+  -DWITH_OPENCV=ON -DWITH_EIGEN=ON -DWITH_PCL=ON `
+  "-DCMAKE_TOOLCHAIN_FILE=D:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
+cmake --build build_msvc --config Debug
+```
+
+> `std::vector`, `std::array`, `T[N]`, Eigen vector/matrix types are detected and visualized out of the box.  
+> `cv::Mat` variables may not appear in the **MatrixViewer Debug** panel because vsdbg reports type strings differently from LLDB/GDB.  
+> For the best coverage of complex types, use **LLVM + CodeLLDB** instead.
 
 ---
 
@@ -135,6 +153,29 @@ Type detection works for simple types; `cv::Mat` and other complex types may sho
     "miDebuggerPath": "/usr/bin/gdb"
 }
 ```
+
+### cppvsdbg (MSVC, Windows)
+
+```jsonc
+{
+    "name": "C++ Demo (MSVC / cppvsdbg)",
+    "type": "cppvsdbg",
+    "request": "launch",
+    "program": "${workspaceFolder}/build_msvc/Debug/demo.exe",
+    "args": [],
+    "cwd": "${workspaceFolder}",
+    "stopAtEntry": false,
+    "environment": [],
+    "console": "internalConsole"
+}
+```
+
+> If the executable cannot find vcpkg DLLs at startup, add the `debug/bin` folder to `environment`:
+> ```jsonc
+> "environment": [
+>     { "name": "PATH", "value": "D:/Library/vcpkg/installed/x64-windows/debug/bin;${env:PATH}" }
+> ]
+> ```
 
 ---
 

@@ -45,7 +45,7 @@
 |--------|--------|--------------|------|
 | Clang/LLVM | CodeLLDB | `lldb` | Windows 下需要 `-gdwarf-4 -fstandalone-debug` |
 | GCC | cppdbg + gdb | `cppdbg` | 标准 DWARF，开箱即用 |
-| MSVC | cppdbg + vsdbg | `cppdbg` | 类型检查受限；完整支持需要 DWARF 调试信息 |
+| MSVC | cppvsdbg | `cppvsdbg` | 需要 Visual Studio 2019+；使用 `build_msvc.bat` 构建 |
 
 > **推荐组合：Windows + LLVM + CodeLLDB。**  
 > LLDB 对 PDB（CodeView）支持有限；在 Windows 上必须使用 DWARF 调试信息，  
@@ -90,10 +90,28 @@ cmake -DCMAKE_BUILD_TYPE=Debug ..
 make -j$(nproc)
 ```
 
-### MSVC + cppdbg（Windows）
+### MSVC + cppvsdbg（Windows）
 
-使用 Visual Studio 或 `cmake --build . --config Debug` 进行 Debug 构建。  
-简单类型可以正常检测；`cv::Mat` 等复杂类型的类型信息可能不完整。
+使用 `build_msvc.bat` 脚本：
+
+```bat
+test\test_cpp\scripts\bat\build_msvc.bat
+```
+
+该脚本使用 Visual Studio（2022 或 2024）进行配置和构建，输出文件为 `build_msvc/Debug/demo.exe`。
+
+也可手动构建：
+
+```powershell
+cmake -S . -B build_msvc -G "Visual Studio 17 2022" -A x64 `
+  -DWITH_OPENCV=ON -DWITH_EIGEN=ON -DWITH_PCL=ON `
+  "-DCMAKE_TOOLCHAIN_FILE=D:/Library/vcpkg/scripts/buildsystems/vcpkg.cmake"
+cmake --build build_msvc --config Debug
+```
+
+> `std::vector`、`std::array`、`T[N]`、Eigen 向量/矩阵类型开箱即用，可正常检测与可视化。  
+> `cv::Mat` 变量可能不会出现在 **MatrixViewer Debug** 面板中，原因是 vsdbg 上报的类型字符串与 LLDB/GDB 不同。  
+> 如需最佳复杂类型覆盖率，推荐使用 **LLVM + CodeLLDB**。
 
 ---
 
@@ -135,6 +153,29 @@ make -j$(nproc)
     "miDebuggerPath": "/usr/bin/gdb"
 }
 ```
+
+### cppvsdbg（MSVC，Windows）
+
+```jsonc
+{
+    "name": "C++ Demo (MSVC / cppvsdbg)",
+    "type": "cppvsdbg",
+    "request": "launch",
+    "program": "${workspaceFolder}/build_msvc/Debug/demo.exe",
+    "args": [],
+    "cwd": "${workspaceFolder}",
+    "stopAtEntry": false,
+    "environment": [],
+    "console": "internalConsole"
+}
+```
+
+> 如果程序启动时找不到 vcpkg DLL，请将 `debug/bin` 目录添加到 `environment`：
+> ```jsonc
+> "environment": [
+>     { "name": "PATH", "value": "D:/Library/vcpkg/installed/x64-windows/debug/bin;${env:PATH}" }
+> ]
+> ```
 
 ---
 

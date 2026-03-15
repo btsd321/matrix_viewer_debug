@@ -52,7 +52,7 @@ src/
 │   │       └── builtins/     # Python built-in types (list, tuple, range)
 │   │           ├── plotProvider.ts
 │   │           └── pointCloudProvider.ts
-│   └── cpp/                  # C++ / cppdbg / lldb adapter
+│   └── cpp/                  # C++ / GDB (cppdbg) / vsdbg (cppvsdbg) / CodeLLDB (lldb) adapter
 │       ├── cppTypes.ts       # Layer-1 type detection (cv::Mat, Eigen, std::vector, pcl, C-arrays)
 │       ├── cppDebugger.ts    # DAP communication (evaluate, readMemory, getVariablesInScope, etc.)
 │       ├── cppAdapter.ts     # Implements IDebugAdapter, delegates to coordinators
