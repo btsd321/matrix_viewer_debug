@@ -25,6 +25,7 @@
     "open3d",
     "image",
     "plot",
+    "scatter",
     "point cloud",
     "debug",
     "visualize",
