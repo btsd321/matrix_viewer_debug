@@ -56,12 +56,12 @@ npm run compile
 
 ## 启动调试会话
 
-1. 在 VS Code 中打开 Python 文件（或 Jupyter Notebook）。
+1. 在 VS Code 中打开 Python 文件。
 2. 设置一个或多个断点。
 3. 按 **F5**（或使用**运行 → 启动调试**）。
 4. 调试器在第一个断点处暂停。
 
-> 支持的 Session 类型：`python`、`debugpy`、`jupyter`。
+> 支持的 Session 类型：`python`、`debugpy`。
 
 ![Python 调试会话已启动，调试器停在断点处](../../../assets/usage_images/python_debug.png)
 
