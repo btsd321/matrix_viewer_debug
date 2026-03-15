@@ -8,7 +8,7 @@
 
 [English](README.md) | 中文
 
-一个在调试过程中可视化 1/2/3D 数据结构的 VS Code 扩展。支持 **Python**（debugpy）和 **C++**（cppdbg / lldb）。
+一个在调试过程中可视化 1/2/3D 数据结构的 VS Code 扩展。支持 **Python**（debugpy）和 **C++**（GDB / vsdbg / CodeLLDB）。
 
 **灵感来源于 [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp) 以及 Visual Studio 的 [Image Watch](https://marketplace.visualstudio.com/items?itemName=VisualCPPTeam.ImageWatch2022) 插件。**
 
@@ -96,8 +96,11 @@
 
 | 调试器 | Session 类型 | 1D 数据 | 图像 | 点云 | 状态 |
 | --------- | ------------ | ------- | ----- | ----------- | ------ |
-| cppdbg | `cppdbg` | ✅ | ✅ | ✅ | **已支持** |
+| GDB | `cppdbg` | ✅ | ✅ | ✅ | **已支持** |
+| vsdbg | `cppvsdbg` | ✅ | ✅ | ✅ | **已支持** |
 | CodeLLDB | `lldb` | ✅ | ✅ | ✅ | **已支持** |
+
+> **vsdbg（cppvsdbg）**：需要 Visual Studio 2019+。使用 [`build_msvc.bat`](test/test_cpp/scripts/bat/build_msvc.bat) 构建。如需最佳类型检测覆盖率（尤其是 `cv::Mat`），推荐使用 LLVM + CodeLLDB。
 
 ---
 

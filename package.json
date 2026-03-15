@@ -20,17 +20,27 @@
   "keywords": [
     "numpy",
     "opencv",
-    "pytorch",
+    "torch",
+    "pillow",
+    "open3d",
     "image",
+    "plot",
+    "scatter",
+    "point cloud",
     "debug",
     "visualize",
+    "debugger",
+    "debugpy",
+    "gdb",
+    "vsdbg",
+    "codelldb",
     "python",
     "c++",
     "cpp",
     "eigen",
     "pcl",
-    "point cloud",
-    "matrix"
+    "matrix",
+    "array"
   ],
   "icon": "assets/icon_256x256.png",
   "activationEvents": [
@@ -138,11 +148,6 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically refresh open viewers when stepping through code"
-        },
-        "matrixViewer.largeDataThresholdMB": {
-          "type": "number",
-          "default": 1,
-          "description": "Data size threshold (in MB) for switching to Base64 binary transfer instead of JSON"
         },
         "matrixViewer.maxDisplaySize": {
           "type": "number",

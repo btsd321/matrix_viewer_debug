@@ -56,12 +56,12 @@ npm run compile
 
 ## Starting a Debug Session
 
-1. Open a Python file (or Jupyter notebook) in VS Code.
+1. Open a Python file in VS Code.
 2. Set one or more breakpoints.
 3. Press **F5** (or use **Run → Start Debugging**).
 4. The debugger pauses at the first breakpoint.
 
-> Supported session types: `python`, `debugpy`, `jupyter`.
+> Supported session types: `python`, `debugpy`.
 
 ![Starting a Python debug session with the debugger paused at a breakpoint](../../../assets/usage_images/python_debug.png)
 

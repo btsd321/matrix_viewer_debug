@@ -2,7 +2,7 @@
 
 > 参考项目: [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp)  
 > VS Code 调试可视化扩展，在调试过程中可视化 1/2/3D 数据结构。
-> 目前支持 **Python**（debugpy）；**C++**（cppdbg / lldb）支持正在开发中。
+> 目前支持 **Python**（debugpy）和 **C++**（GDB / vsdbg / CodeLLDB）。
 
 ---
 
@@ -139,12 +139,20 @@
 
 ## 四、调试器兼容性
 
-Python 调试主要使用 **debugpy**（即 VS Code Python 扩展的默认调试器）。
+### Python
 
-| 调试器类型 | `debugSession.type` | 说明 |
-|-----------|---------------------|------|
+| 调试器 | `debugSession.type` | 说明 |
+|--------|---------------------|------|
 | debugpy | `"python"` 或 `"debugpy"` | VS Code Python Extension |
 | Jupyter | `"jupyter"` | Jupyter Notebook 调试（可选支持） |
+
+### C++
+
+| 调试器 | `debugSession.type` | 说明 |
+|--------|---------------------|------|
+| GDB | `"cppdbg"` | C/C++ 扩展（ms-vscode.cpptools），Linux / macOS / WSL |
+| vsdbg | `"cppvsdbg"` | Visual Studio Windows Debugger，需要 Visual Studio 2019+ |
+| CodeLLDB | `"lldb"` | CodeLLDB 扩展（vadimcn.vscode-lldb），Windows（推荐）/ macOS / Linux |
 
 ### 数据获取策略
 
@@ -293,7 +301,7 @@ Webview 渲染
 | 方面 | C++ 版 | Python 版 |
 |------|--------|-----------|
 | 数据获取方式 | 通过 DAP `readMemory` 直接读取内存 | 通过 DAP `evaluate` 执行 Python 表达式 |
-| 类型检测复杂度 | 高（需区分 LLDB/GDB/MSVC，STL 内部成员名差异） | 低（统一 debugpy，Python 对象有统一接口） |
+| 类型检测复杂度 | 高（需区分 CodeLLDB/GDB/vsdbg，STL 内部成员名差异） | 低（统一 debugpy，Python 对象有统一接口） |
 | 支持的图像库 | OpenCV cv::Mat 为主 | numpy ndarray 为主，兼容 PIL/PyTorch |
 | 调试器适配 | `cppAdapter.ts` 实现 `IDebugAdapter`（骨架已完成，待填充） | `pythonAdapter.ts` 实现 `IDebugAdapter`（完整实现） |
 | 内存读取 | 分块并行内存读取（`readMemory` DAP） | Base64 encoded bytes via evaluate |
@@ -389,7 +397,7 @@ Webview 渲染
 | `src/adapters/cpp/plotProvider.ts` | ✅ | 曲线分发器（EigenPlotProvider + StdPlotProvider）|
 | `src/adapters/cpp/pointCloudProvider.ts` | ✅ | 点云分发器（PclPointCloudProvider + StdPointCloudProvider）|
 | `src/adapters/cpp/libs/utils.ts` | ✅ | 跨库公用辅助函数 |
-| `src/adapters/cpp/libs/opencv/imageProvider.ts` | ✅ | cv::Mat 图像获取（LLDB + cppdbg 双路径）|
+| `src/adapters/cpp/libs/opencv/imageProvider.ts` | ✅ | cv::Mat 图像获取（LLDB / GDB / vsdbg 三路径）|
 | `src/adapters/cpp/libs/opencv/matUtils.ts` | ✅ | MatInfo 类型及 getMatInfoFromVariables / getMatInfoFromEvaluate |
 | `src/adapters/cpp/libs/std/stdUtils.ts` | ✅ | STL / C-style array / Point3 纯函数类型检测 |
 | `src/adapters/cpp/libs/std/plotProvider.ts` | ✅ | std::vector / std::array / T[N] 1D 曲线获取 |
