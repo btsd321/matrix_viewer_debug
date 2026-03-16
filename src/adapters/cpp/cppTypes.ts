@@ -19,8 +19,12 @@ import { unwrapSmartPointer } from "./shared/utils";
 const IMAGE_TYPE_PATTERNS = [
     /\bcv::Mat\b/i,
     /\bcv2::Mat\b/i,
-    /\bEigen::Matrix/,   // matches MatrixXd, MatrixXf, Matrix<...>
-    /\bEigen::Array/,    // matches ArrayXXd, Array<...>
+    // Eigen::Matrix — exclude column vectors (Cols=1) and row vectors (Rows=1).
+    // GDB expands VectorXd → Matrix<double,-1,1,0,-1,1> which would otherwise
+    // match here and be misclassified as image instead of plot.
+    /\bEigen::Matrix(?!<[^,]+,\s*1[\s,])(?!<[^,]+,[^,]+,\s*1[\s,>])/,
+    // Eigen::Array — same exclusion for 1-column/1-row arrays
+    /\bEigen::Array(?!<[^,]+,\s*1[\s,])(?!<[^,]+,[^,]+,\s*1[\s,>])/,
     // Nested std::array (2D or 3D image): std::array<std::array<...>>
     /std::(?:__1::)?array\s*<\s*(?:class\s+)?std::(?:__1::)?array/,
     // C-style 2D/3D array: T[H][W] or T[H][W][C]
@@ -42,6 +46,11 @@ const POINTCLOUD_TYPE_PATTERNS = [
 const PLOT_TYPE_PATTERNS = [
     /\bstd::vector\b/,
     /\bEigen::Vector/,     // Eigen::VectorXf, VectorXd, etc.
+    // GDB expands VectorXd → Matrix<double,-1,1,...>; match column/row vectors
+    /\bEigen::Matrix<[^,]+,[^,]+,\s*1[\s,>]/,   // Cols=1 (column vector)
+    /\bEigen::Matrix<[^,]+,\s*1[\s,]/,           // Rows=1 (row vector)
+    /\bEigen::Array<[^,]+,[^,]+,\s*1[\s,>]/,    // 1D Array (Cols=1)
+    /\bEigen::Array<[^,]+,\s*1[\s,]/,            // 1D Array (Rows=1)
     /\bstd::array\b/,
     /\bstd::deque\b/,
     // C-style 1D numeric arrays: double[128], int[64], etc.

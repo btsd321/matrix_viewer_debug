@@ -19,7 +19,7 @@
             "program": "${workspaceFolder}/build_gcc/demo",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "stopAtEntry": false,
+            "stopAtEntry": true,
             "MIMode": "gdb",
             "miDebuggerPath": "gdb",
             "setupCommands": [

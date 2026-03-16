@@ -28,7 +28,9 @@ export async function fetchGdbPlotData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`;
+        // GDB cannot reliably chain method calls on temporaries (e.g. lock().size()).
+        // For weak_ptr, access the internal raw pointer field _M_ptr (libstdc++) directly.
+        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}._M_ptr)` : `(*${varName})`;
         typeName = unwrapped.innerType;
         resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType, variablesReference: 0 };
     }
