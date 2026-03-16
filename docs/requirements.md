@@ -436,9 +436,9 @@ Webview 渲染
 | `src/adapters/python/debugpy/libs/torch/plotProvider.ts` | ✅ | torch.Tensor 1D 曲线获取 |
 | `src/adapters/python/debugpy/libs/builtins/plotProvider.ts` | ✅ | list / tuple / range 曲线获取 |
 | `src/adapters/python/debugpy/libs/builtins/pointCloudProvider.ts` | ✅ | list of (x,y,z) 点云获取 |
-| `src/adapters/cpp/cppTypes.ts` | ✅ | Layer-1 C++ 类型检测（cv::Mat / Eigen / std::vector / std::array / C-style array / Point3 向量 / pcl）|
+| `src/adapters/cpp/cppTypes.ts` | ✅ | Layer-1 C++ 类型检测（cv::Mat / Eigen / std::vector / std::array / C-style array / Point3 向量 / pcl / 智能指针与原生指针自动解引用）|
 | `src/adapters/cpp/shared/debuggerBase.ts` | ✅ | 共享 DAP 工具（getCurrentFrameId / readMemoryChunked / parseSizeFromValue）|
-| `src/adapters/cpp/shared/utils.ts` | ✅ | 跨库公用辅助函数（buffer / dtype / stats）|
+| `src/adapters/cpp/shared/utils.ts` | ✅ | 跨库公用辅助函数（buffer / dtype / stats / SmartPtrUnwrapResult / unwrapSmartPointer）|
 | `src/adapters/cpp/cppAdapter.ts` | ✅ | 实现 IDebugAdapter，按 session.type 路由到各调试器 |
 | `src/adapters/cpp/gdb/debugger.ts` | ✅ | GDB 专用 DAP 通信（repl context，(long long) 转换，getContainerSize）|
 | `src/adapters/cpp/gdb/imageProvider.ts` | ✅ | GDB 图像分发器 |

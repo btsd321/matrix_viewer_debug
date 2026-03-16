@@ -55,10 +55,12 @@
 | **图像（2D）** | `cv::Mat`（OpenCV）| 🖼️ 图像查看器 |
 | | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>`（rows>1, cols>2）| 🖼️ 图像查看器 |
 | | `QImage`（Qt5 / Qt6）| 🖼️ 图像查看器 |
+| | `shared_ptr<T>` / `unique_ptr<T>` / `weak_ptr<T>` / `T*`，`T` 为上述图像类型 | 🖼️ 图像查看器 |
 | **点云（3D）** | `pcl::PointCloud<PointXYZ>` / `<PointXYZRGB>` / `<PointXYZI>` | 📊 3D 查看器 |
 | | `std::vector<cv::Point3f>` / `std::vector<cv::Point3d>` | 📊 3D 查看器 |
 | | `std::array<cv::Point3f, N>` / `std::array<cv::Point3d, N>` | 📊 3D 查看器 |
 | | `QVector<QVector3D>`（Qt5 / Qt6）| 📊 3D 查看器 |
+| | `shared_ptr<T>` / `unique_ptr<T>` / `weak_ptr<T>` / `T*`，`T` 为上述点云类型 | 📊 3D 查看器 |
 | **曲线（1D/2D）** | `Eigen::VectorX*` / `Eigen::RowVectorX*` | 📈 1D 折线图 |
 | | `Eigen::Matrix<T,N,1>` / `Eigen::Matrix<T,1,N>` | 📈 1D 折线图 |
 | | `Eigen::Matrix<T,N,2>`（N×2 矩阵）| 📈 2D 散点图（列0=X，列1=Y）|
@@ -66,6 +68,7 @@
 | | `QVector<T>` / `QList<T>`（数值类型，Qt5 / Qt6）| 📈 1D 折线图 |
 | | `QPolygonF`（Qt5 / Qt6）| 📈 2D 散点图 |
 | | `QVector<QVector2D>` / `QList<QVector2D>`（Qt5 / Qt6）| 📈 2D 散点图 |
+| | `shared_ptr<T>` / `unique_ptr<T>` / `weak_ptr<T>` / `T*`，`T` 为上述曲线类型 | 📈 1D/2D 折线图 |
 
 > **Eigen 路由规则**（C++）：运行时查询 `.rows()` / `.cols()` 决定可视化类型：
 > - `cols == 1` 或 `rows == 1` → **1D 折线图**

@@ -12,6 +12,7 @@
  */
 
 import { VisualizableKind } from "../IDebugAdapter";
+import { unwrapSmartPointer } from "./shared/utils";
 
 // ── Pattern tables ────────────────────────────────────────────────────────
 
@@ -57,8 +58,19 @@ const PLOT_TYPE_PATTERNS = [
 /**
  * Quick detection from the raw DAP type string.
  * Returns "unknown" when no pattern matches.
+ *
+ * Handles smart-pointer wrappers transparently:
+ *   std::shared_ptr<cv::Mat>    → "image"
+ *   std::unique_ptr<std::vector<double>> → "plot"
+ *   QSharedPointer<QImage>      → "image"
  */
 export function basicTypeDetect(typeStr: string): VisualizableKind {
+    // Unwrap smart pointer / raw C pointer and re-run detection on inner type
+    const unwrapped = unwrapSmartPointer(typeStr);
+    if (unwrapped !== null) {
+        return basicTypeDetect(unwrapped.innerType);
+    }
+
     for (const pat of IMAGE_TYPE_PATTERNS) {
         if (pat.test(typeStr)) {
             return "image";
