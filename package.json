@@ -38,7 +38,8 @@
     "eigen",
     "pcl",
     "matrix",
-    "array"
+    "array",
+    "qt"
   ],
   "icon": "assets/icon_256x256.png",
   "activationEvents": [
