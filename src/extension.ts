@@ -11,12 +11,22 @@ import { PanelManager } from "./utils/panelManager";
 import { SyncManager } from "./utils/syncManager";
 import { getAdapter } from "./adapters/adapterRegistry";
 import { logger } from "./log/logger";
+import {
+    logEnvironmentInfo,
+    logDebugSessionStarted,
+    logPythonRuntimeVersions,
+    logCppRuntimeVersions,
+} from "./utils/envInfo";
 
 export function activate(context: vscode.ExtensionContext) {
     const logOut = vscode.window.createOutputChannel("MatrixViewer");
     logger.init(logOut);
     logger.setLevel("DEBUG");
     context.subscriptions.push(logOut);
+
+    // Log host OS / runtime / extension version immediately after logger init.
+    const extVersion = (vscode.extensions.getExtension(context.extension.id)?.packageJSON as Record<string, unknown>)?.version as string ?? "unknown";
+    logEnvironmentInfo(extVersion);
 
     const panelManager = new PanelManager(context);
     const syncManager = new SyncManager();
@@ -192,6 +202,13 @@ export function activate(context: vscode.ExtensionContext) {
 
     // ── Debug Session Events ─────────────────────────────────────────────────
 
+    // Log session identity and launch config when a new debug session starts.
+    context.subscriptions.push(
+        vscode.debug.onDidStartDebugSession((session) => {
+            logDebugSessionStarted(session);
+        })
+    );
+
     // onDidChangeActiveStackItem fires reliably when the debugger stops at a
     // breakpoint or after a step (VS Code 1.71+).  This covers Python/debugpy
     // which does NOT forward the standard DAP "stopped" event via
@@ -201,6 +218,13 @@ export function activate(context: vscode.ExtensionContext) {
             const session = vscode.debug.activeDebugSession;
             if (!session) {
                 return;
+            }
+            // Log interpreter / library versions once per session (non-blocking).
+            const isPython = session.type === "python" || session.type === "debugpy" || session.type === "jupyter";
+            if (isPython) {
+                logPythonRuntimeVersions(session).catch(() => { /* non-critical */ });
+            } else {
+                logCppRuntimeVersions(session).catch(() => { /* non-critical */ });
             }
             const config = vscode.workspace.getConfiguration("matrixViewer");
             if (config.get<boolean>("autoDetect", true)) {
