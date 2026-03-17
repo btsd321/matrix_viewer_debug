@@ -7,10 +7,11 @@ import { parseVersionNum } from "../../../shared/versionUtils";
  * available in the current debug session.
  *
  * Strategy (tried in order):
- *   1. moduleVersion — version parsed from the DLL install path by the coordinator
- *      (e.g. C:\Qt\5.15.2\...\Qt5Cored.dll → "5.15.2"); works on Windows without
- *      any expression evaluation.  Falls back to major-only from filename when
- *      the path doesn't follow the standard Qt installer layout.
+ *   1. moduleVersion — version read from the PE FILEVERSION resource of the
+ *      loaded DLL via the LLDB Python API (`lldb.SBModule.GetVersion()`); works
+ *      on Windows without any JIT or symbol table access.
+ *      Falls back to parsing the DLL install path (e.g. C:\Qt\5.15.2\...) or
+ *      major-only from the filename when the Python API is unavailable.
  *   2. QT_VERSION_MAJOR / QT_VERSION_MINOR / QT_VERSION_PATCH macros (Qt 5+) —
  *      available in DWARF debug info on Linux/macOS.
  *   3. qt_version — exported as `Q_CORE_EXPORT const char qt_version[]` from QtCore;

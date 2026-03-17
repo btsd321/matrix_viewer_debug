@@ -7,6 +7,7 @@
 
 import * as vscode from "vscode";
 import { evaluateExpression } from "../../debugger";
+import { logger } from "../../../../../log/logger";
 import { parseVersionNum } from "../../../shared/versionUtils";
 
 /**
@@ -22,6 +23,7 @@ export async function fetchEigenVersion(
         evaluateExpression(session, "(long long)EIGEN_MAJOR_VERSION", frameId),
         evaluateExpression(session, "(long long)EIGEN_MINOR_VERSION", frameId),
     ]);
+    logger.debug(`[versionInfo/eigen][cppvsdbg] major="${majorRaw}" minor="${minorRaw}" patch="${patchRaw}"`);
     const major = parseVersionNum(majorRaw);
     if (major !== null) {
         const minor = parseVersionNum(minorRaw) ?? "?";

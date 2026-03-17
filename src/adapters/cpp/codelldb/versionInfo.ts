@@ -5,14 +5,16 @@
  * Each library's fetch logic lives in its own libs/<libName>/versionInfo.ts.
  *
  * Version detection order:
- *   1. DAP `modules` request — parses version from the loaded DLL's filename or
- *      install-directory path (CodeLLDB never populates the DAP `version` field,
- *      so we extract version from the module `name` / `path` strings instead).
- *   2. Per-library expression-based strategies (macros, function calls, globals).
+ *   1. LLDB Python API via CodeLLDB `/py` prefix — `lldb.SBModule.GetVersion()`
+ *      reads the PE VS_VERSIONINFO FILEVERSION resource directly from the DLL
+ *      binary (no JIT, no symbols, no macros needed).
+ *   2. DAP `modules` request — parse version from loaded DLL's filename or
+ *      install-directory path as a fallback when Python API is unavailable.
+ *   3. Per-library expression-based strategies (macros, function calls, globals).
  */
 
 import * as vscode from "vscode";
-import { getCurrentFrameId } from "./debugger";
+import { getCurrentFrameId, evaluateExpression } from "./debugger";
 import { logger } from "../../../log/logger";
 import { fetchOpenCvVersion } from "./libs/opencv/versionInfo";
 import { fetchEigenVersion } from "./libs/eigen/versionInfo";
@@ -22,6 +24,68 @@ import { fetchQtVersion } from "./libs/qt/versionInfo";
 // ── DAP module helpers ────────────────────────────────────────────────────
 
 type DapModule = { name?: string; path?: string; version?: string };
+
+/**
+ * Return the basename of the first loaded module whose name matches `pattern`.
+ */
+function findModuleBasename(mods: DapModule[], pattern: RegExp): string | null {
+    const mod = mods.find((m) => pattern.test(m.name ?? ""));
+    return mod?.name ?? null;
+}
+
+/**
+ * Query a module's PE FILEVERSION via Win32 ctypes in CodeLLDB's Python context.
+ *
+ * CodeLLDB exposes the `/py` prefix to run Python expressions in its embedded
+ * LLDB Python interpreter (documented in MANUAL.md).
+ * Uses `GetFileVersionInfoW` + `VerQueryValueW` (Win32 version.dll) via Python
+ * ctypes to read the PE VS_VERSIONINFO FILEVERSION resource directly —
+ * no JIT, no macros, no symbol table needed.
+ *
+ * `m.file.GetFilename()` is used instead of `m.file.basename` because
+ * `GetFilename()` is a method available in all LLDB Python binding versions.
+ *
+ *   moduleVersionFromPy(session, frameId, "opencv_core4d.dll") → "4.8.3"
+ *   moduleVersionFromPy(session, frameId, "Qt5Cored.dll")      → "5.15.2"
+ */
+async function moduleVersionFromPy(
+    session: vscode.DebugSession,
+    frameId: number | undefined,
+    basename: string
+): Promise<string | null> {
+    const lower = basename.toLowerCase();
+    // VS_FIXEDFILEINFO DWORD layout (offset from struct start):
+    //   [0] dwSignature, [1] dwStrucVersion,
+    //   [2] dwFileVersionMS → major = >>16, minor = &0xFFFF
+    //   [3] dwFileVersionLS → patch = >>16
+    // The Python expression is a single lambda chain (no statements allowed in /py):
+    //   1. Find the module's full path via m.file.GetPath() / m.file.GetFilename()
+    //   2. Call GetFileVersionInfoSizeW to get buffer size
+    //   3. Allocate buffer, call GetFileVersionInfoW to populate it
+    //   4. Call VerQueryValueW(buf, '\\', ...) to get pointer to VS_FIXEDFILEINFO
+    //   5. Cast + slice to read dwFileVersionMS and dwFileVersionLS
+    const expr = (
+        `/py (lambda ct,path:` +
+        `(lambda sz:(lambda buf:` +
+        `(lambda pv,n:` +
+        `(lambda fi:'.'.join(map(str,[fi[2]>>16,fi[2]&0xffff,fi[3]>>16]))` +
+        ` if fi and fi[2]>>16>0 else '')` +
+        `(ct.cast(pv.value,ct.POINTER(ct.c_uint32*13)).contents if pv.value else None)` +
+        ` if ct.windll.version.VerQueryValueW(buf,'\\\\',ct.byref(pv),ct.byref(n)) else '')` +
+        `(ct.c_void_p(),ct.c_uint())` +
+        ` if ct.windll.version.GetFileVersionInfoW(path,0,sz,buf) else '')` +
+        `(ct.create_string_buffer(sz)) if sz else '')` +
+        `(ct.windll.version.GetFileVersionInfoSizeW(path,None)) if path else '')` +
+        `(__import__('ctypes'),next((str(m.file) for m in lldb.target.modules if m.file.GetFilename().lower()=='${lower}'),''))`
+    );
+    const result = await evaluateExpression(session, expr, frameId);
+    logger.debug(`[versionInfo] moduleVersionFromPy("${basename}"): raw="${result}"`);
+    if (!result) { return null; }
+    const m = result.match(/(\d+\.\d+(?:\.\d+)*)/);
+    return m ? m[1] : null;
+}
+
+// ── Filename / path fallbacks ─────────────────────────────────────────────
 
 /**
  * Extract OpenCV version from a loaded DLL filename.
@@ -105,12 +169,23 @@ export async function logCppLibVersions(session: vscode.DebugSession): Promise<v
         (mods.length > 20 ? ` … (${mods.length} total)` : "")
     );
 
-    // Extract per-library version hints from the modules list.
-    // Passed to each fetcher as a pre-resolved string (last-resort fallback).
-    const cvModVer  = cvVersionFromModules(mods);
-    const qtModVer  = qtVersionFromModules(mods);
-    const pclModVer = pclVersionFromModules(mods);
+    // ── Step 1: LLDB Python API — reads PE FILEVERSION directly ──────────
+    const cvBasename  = findModuleBasename(mods, /opencv_(?:world|core|videoio|imgproc)/i);
+    const qtBasename  = findModuleBasename(mods, /Qt[56]Core(?:d)?\.dll/i);
+    const pclBasename = findModuleBasename(mods, /pcl_common/i);
 
+    const [cvPyVer, qtPyVer, pclPyVer] = await Promise.all([
+        cvBasename  ? moduleVersionFromPy(session, frameId, cvBasename)  : Promise.resolve(null),
+        qtBasename  ? moduleVersionFromPy(session, frameId, qtBasename)  : Promise.resolve(null),
+        pclBasename ? moduleVersionFromPy(session, frameId, pclBasename) : Promise.resolve(null),
+    ]);
+
+    // ── Step 2: Filename/path fallbacks ───────────────────────────────────
+    const cvModVer  = cvPyVer  ?? cvVersionFromModules(mods);
+    const qtModVer  = qtPyVer  ?? qtVersionFromModules(mods);
+    const pclModVer = pclPyVer ?? pclVersionFromModules(mods);
+
+    // ── Step 3: Per-library expression strategies ─────────────────────────
     const [cvVer, eigenVer, pclVer, qtVer] = await Promise.all([
         fetchOpenCvVersion(session, frameId, cvModVer),
         fetchEigenVersion(session, frameId),

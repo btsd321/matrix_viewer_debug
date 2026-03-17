@@ -2,10 +2,11 @@
  * opencv/versionInfo.ts — Fetch OpenCV runtime version via CodeLLDB (session.type = "lldb").
  *
  * Strategy (tried in order):
- *   1. moduleVersion — version parsed from the DLL filename by the coordinator
- *      (e.g. opencv_core480d.dll → "4.8.0"); works on Windows without any
- *      expression evaluation.  CodeLLDB never populates the DAP `version` field,
- *      so parsing the filename suffix is the only reliable fallback on Windows.
+ *   1. moduleVersion — version read from the PE FILEVERSION resource of the
+ *      loaded DLL via the LLDB Python API (`lldb.SBModule.GetVersion()`); works
+ *      on Windows without any JIT or symbol table access.
+ *      Falls back to filename suffix parsing (e.g. opencv_core480d.dll → "4.8.0")
+ *      when the Python API is unavailable.
  *   2. CV_VERSION_MAJOR / CV_VERSION_MINOR / CV_VERSION_REVISION macros —
  *      available in DWARF debug info on Linux/macOS (requires LLDB with DWARF).
  *   3. cv::getVersionMajor() bare function call — works when LLDB can JIT.
