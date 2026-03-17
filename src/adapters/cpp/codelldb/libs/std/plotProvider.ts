@@ -75,11 +75,12 @@ async function getDataPointer(
         `${varName}.data()`,
     ];
     // For weak_ptr lock_deref (*xxx.lock()): .lock() fails in LLDB.
-    // Use internal raw pointer (_M_ptr / __ptr_) directly.
+    // Use internal raw pointer directly:
+    //   libstdc++: _M_ptr   libc++: __ptr_   MSVC STL: _Ptr
     const lockDerefM = varName.match(/^\(\*(.+)\.lock\(\)\)$/);
     if (lockDerefM) {
         const wpName = lockDerefM[1];
-        for (const ptrField of ["_M_ptr", "__ptr_"]) {
+        for (const ptrField of ["_M_ptr", "__ptr_", "_Ptr"]) {
             exprs.push(`${wpName}.${ptrField}->data()`, `${wpName}.${ptrField}[0]`);
         }
     }

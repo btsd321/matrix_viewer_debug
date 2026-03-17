@@ -298,11 +298,11 @@ export async function getContainerSize(
     }
     // Handle weak_ptr lock_deref (*xxx.lock()): LLDB cannot call .lock() which
     // returns a temporary shared_ptr. Use internal raw pointer fields instead.
-    //   libstdc++: _M_ptr;   libc++: __ptr_
+    //   libstdc++: _M_ptr;   libc++: __ptr_;   MSVC STL: _Ptr
     const lockDerefMatch = varName.match(/^\(\*(.+)\.lock\(\)\)$/);
     if (lockDerefMatch) {
         const wpName = lockDerefMatch[1];
-        for (const ptrField of ["_M_ptr", "__ptr_"]) {
+        for (const ptrField of ["_M_ptr", "__ptr_", "_Ptr"]) {
             exprs.push(
                 `${wpName}.${ptrField}->size()`,
                 `(long long)${wpName}.${ptrField}->size()`,
@@ -394,6 +394,9 @@ export async function getVectorDataPointer(
     variablesReference: number,
     frameId?: number
 ): Promise<string | null> {
+    // Saved when Strategy A finds a "pointer" synthetic child (weak_ptr/shared_ptr).
+    // Used as a fallback for resolveMsvcVectorPtrs at the end of the function.
+    let ptrChildVr = 0;
     if (variablesReference > 0) {
         try {
             const varsResp = await session.customRequest("variables", {
@@ -414,6 +417,7 @@ export async function getVectorDataPointer(
                 (c) => c.name === "pointer" && (c.variablesReference ?? 0) > 0
             );
             if (ptrChild) {
+                ptrChildVr = ptrChild.variablesReference!;
                 const ptrResp = await session.customRequest("variables", {
                     variablesReference: ptrChild.variablesReference!,
                 });
@@ -490,7 +494,7 @@ export async function getVectorDataPointer(
     const lockDerefM = varName.match(/^\(\*(.+)\.lock\(\)\)$/);
     if (lockDerefM) {
         const wpName = lockDerefM[1];
-        for (const ptrField of ["_M_ptr", "__ptr_"]) {
+        for (const ptrField of ["_M_ptr", "__ptr_", "_Ptr"]) {
             expressions.push(
                 `${wpName}.${ptrField}->data()`,
                 `${wpName}.${ptrField}[0]`,
@@ -505,7 +509,18 @@ export async function getVectorDataPointer(
     // ([raw] → _Mypair → _Myval2 → _Myfirst)
     const msvc = await resolveMsvcVectorPtrs(session, variablesReference);
     logger.debug(`[getVectorDataPointer] ${varName} MSVC layout -> firstPtr=${msvc?.firstPtr ?? "null"}`);
-    return msvc?.firstPtr ?? null;
+    if (msvc?.firstPtr) { return msvc.firstPtr; }
+
+    // For weak_ptr/shared_ptr: variablesReference points to the wrapper object
+    // whose [raw] is _Ptr_base (no _Mypair). The "pointer" synthetic child
+    // (ptrChildVr, saved from Strategy A) represents the pointed-to vector;
+    // apply resolveMsvcVectorPtrs on it to get the vector's _Myfirst.
+    if (ptrChildVr > 0) {
+        const msvcViaPtr = await resolveMsvcVectorPtrs(session, ptrChildVr);
+        logger.debug(`[getVectorDataPointer] ${varName} MSVC via pointer child -> firstPtr=${msvcViaPtr?.firstPtr ?? "null"}`);
+        if (msvcViaPtr?.firstPtr) { return msvcViaPtr.firstPtr; }
+    }
+    return null;
 }
 
 // ── MSVC STL internal layout helper ─────────────────────────────────────
@@ -625,7 +640,9 @@ export async function getVectorSizeFromChildren(
             const indexed = children.filter((c) => /^\[\d+\]$/.test(c.name)).length;
             if (indexed > 0) { return indexed; }
 
-            // Strategy 3: _Mypair layout (MSVC STL)
+            // Strategy 3: _Mypair layout (MSVC STL) — first try the vector's own
+            // variablesRef, then fall back to following the "pointer" child
+            // (present for weak_ptr/shared_ptr where [raw] → _Ptr_base, not _Mypair).
             const msvc = await resolveMsvcVectorPtrs(session, variablesReference);
             if (msvc) {
                 const first = BigInt(msvc.firstPtr);
@@ -636,6 +653,27 @@ export async function getVectorSizeFromChildren(
                     `last=${msvc.lastPtr} elementByteSize=${elementByteSize} -> count=${count}`
                 );
                 return count;
+            }
+
+            // Strategy 3b: MSVC STL weak_ptr — [raw] leads to _Ptr_base, not _Mypair.
+            // Follow the top-level "pointer" synthetic child (the pointed-to vector)
+            // and apply resolveMsvcVectorPtrs on its variablesRef instead.
+            const ptrSynthChild = (resp?.variables ?? []).find(
+                (c: { name: string; variablesReference?: number }) =>
+                    c.name === "pointer" && (c.variablesReference ?? 0) > 0
+            );
+            if (ptrSynthChild) {
+                const msvcViaPtr = await resolveMsvcVectorPtrs(session, ptrSynthChild.variablesReference!);
+                if (msvcViaPtr) {
+                    const first = BigInt(msvcViaPtr.firstPtr);
+                    const last  = BigInt(msvcViaPtr.lastPtr);
+                    const count = Number(last >= first ? (last - first) / BigInt(elementByteSize) : 0n);
+                    logger.debug(
+                        `[getVectorSizeFromChildren] MSVC via pointer child: first=${msvcViaPtr.firstPtr} ` +
+                        `last=${msvcViaPtr.lastPtr} elementByteSize=${elementByteSize} -> count=${count}`
+                    );
+                    return count;
+                }
             }
         }
 

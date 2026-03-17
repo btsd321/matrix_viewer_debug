@@ -1,8 +1,12 @@
 /**
- * eigen/versionInfo.ts — Fetch Eigen runtime version via CodeLLDB (session.type = "lldb").
+ * eigen/versionInfo.ts — Fetch Eigen version via CodeLLDB (session.type = "lldb").
  *
  * EIGEN_WORLD_VERSION / EIGEN_MAJOR_VERSION / EIGEN_MINOR_VERSION are
- * preprocessor macros; they may be inlined and not accessible in all builds.
+ * C preprocessor macros. They are NOT stored in debug symbols and cannot
+ * be read via LLDB expression evaluation in general.
+ *
+ * On Linux/macOS with DWARF debug info, LLDB may resolve them as compile-time
+ * constants. On Windows with PDB debug info, these macros are always absent.
  */
 
 import * as vscode from "vscode";
@@ -17,16 +21,16 @@ export async function fetchEigenVersion(
     session: vscode.DebugSession,
     frameId: number | undefined
 ): Promise<string | null> {
-    const [majorRaw, minorRaw, patchRaw] = await Promise.all([
-        evaluateExpression(session, "(int)EIGEN_WORLD_VERSION", frameId),
+    // Short-circuit: probe major first. If it fails, all macros will fail for
+    // the same underlying reason (macros not in debug symbols); skip minor/patch.
+    const majorRaw = await evaluateExpression(session, "(int)EIGEN_WORLD_VERSION", frameId);
+    const major = parseVersionNum(majorRaw);
+    if (major === null) { return null; }
+    const [minorRaw, patchRaw] = await Promise.all([
         evaluateExpression(session, "(int)EIGEN_MAJOR_VERSION", frameId),
         evaluateExpression(session, "(int)EIGEN_MINOR_VERSION", frameId),
     ]);
-    const major = parseVersionNum(majorRaw);
-    if (major !== null) {
-        const minor = parseVersionNum(minorRaw) ?? "?";
-        const patch = parseVersionNum(patchRaw) ?? "?";
-        return `${major}.${minor}.${patch}`;
-    }
-    return null;
+    const minor = parseVersionNum(minorRaw) ?? "?";
+    const patch = parseVersionNum(patchRaw) ?? "?";
+    return `${major}.${minor}.${patch}`;
 }

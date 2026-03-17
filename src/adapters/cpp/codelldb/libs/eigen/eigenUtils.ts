@@ -59,13 +59,15 @@ export async function evalEigenDim(
     frameId?: number
 ): Promise<number> {
     // m_rows / m_cols are Eigen's internal DenseStorage members — accessible
-    // even when LLDB cannot call C++ member functions.
+    // as struct fields without JIT compilation.  Try them first so that
+    // LLDB on Windows/PDB (where method calls fail) does not emit Syntax error
+    // logs before reaching the working expression.
     const internalProp = prop === "rows" ? "m_rows" : "m_cols";
     const exprs = [
-        `${varName}.${prop}()`,
-        `(long long)${varName}.${prop}()`,
         `${varName}.m_storage.${internalProp}`,
         `(long long)${varName}.m_storage.${internalProp}`,
+        `${varName}.${prop}()`,
+        `(long long)${varName}.${prop}()`,
     ];
     for (const expr of exprs) {
         const res = await evaluateExpression(session, expr, frameId);

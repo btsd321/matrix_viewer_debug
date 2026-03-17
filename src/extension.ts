@@ -195,7 +195,6 @@ export function activate(context: vscode.ExtensionContext) {
             const wordRange = e.textEditor.document.getWordRangeAtPosition(position);
             const word = wordRange ? e.textEditor.document.getText(wordRange) : "";
             const canViz = word.length > 0 && visualizableVarNames.has(word);
-            logger.debug(`[editorContext] word="${word}" canViz=${canViz}`);
             vscode.commands.executeCommand("setContext", "matrixViewer.canVisualizeSelection", canViz);
         })
     );
