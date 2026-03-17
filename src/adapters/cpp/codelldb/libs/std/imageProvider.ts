@@ -137,6 +137,7 @@ export class StdImageProvider implements ILibImageProvider {
         }
 
         if (!dataPtr) {
+            logger.warn(`[StdImage] ${varName}: could not resolve data pointer`);
             return null;
         }
 

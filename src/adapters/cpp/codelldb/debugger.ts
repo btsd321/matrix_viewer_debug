@@ -331,7 +331,7 @@ export async function getContainerSize(
         return sizeFromValue;
     }
 
-    logger.debug(`[getContainerSize] all exprs failed for ${varName}, returning 0`);
+    logger.warn(`[getContainerSize] all exprs failed for ${varName}, returning 0`);
     return 0;
 }
 

@@ -153,6 +153,7 @@ export class StdPlotProvider implements ILibPlotProvider {
         const dataPtr = await getDataPointer(session, varName, info);
         logger.debug(`[StdPlot] ${varName}: dataPtr=${dataPtr}`);
         if (!dataPtr) {
+            logger.warn(`[StdPlot] ${varName}: could not resolve data pointer`);
             return null;
         }
 
@@ -160,7 +161,7 @@ export class StdPlotProvider implements ILibPlotProvider {
         logger.debug(`[StdPlot] ${varName}: reading ${totalBytes} bytes (dtype=${dtype}, size=${size})`);
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
         if (!buffer) {
-            logger.debug(`[StdPlot] ${varName}: readMemoryChunked returned null`);
+            logger.warn(`[StdPlot] ${varName}: readMemoryChunked returned null`);
             return null;
         }
 
