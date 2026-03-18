@@ -35,13 +35,13 @@ export function isRemote(): boolean {
  * Decide whether to compress an image whose raw pixel data is `rawByteCount` bytes.
  *
  * Reads two settings:
- *   matrixViewer.compression.mode        — "auto" | "always" | "never"
- *   matrixViewer.compression.thresholdMB — number (default 1)
+ *   matrixViewer.image.compression.mode        — "auto" | "always" | "never"
+ *   matrixViewer.image.compression.thresholdMB — number (default 1)
  */
 export function shouldCompress(rawByteCount: number): boolean {
     const cfg = vscode.workspace.getConfiguration("matrixViewer");
-    const mode = cfg.get<string>("compression.mode", "auto");
-    const thresholdMB = cfg.get<number>("compression.thresholdMB", 1);
+    const mode = cfg.get<string>("image.compression.mode", "auto");
+    const thresholdMB = cfg.get<number>("image.compression.thresholdMB", 1);
 
     if (mode === "never") { return false; }
     if (mode === "always") { return rawByteCount >= thresholdMB * 1024 * 1024; }

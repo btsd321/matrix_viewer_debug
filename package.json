@@ -178,7 +178,7 @@
           ],
           "description": "Default colormap for single-channel float images"
         },
-        "matrixViewer.compression.mode": {
+        "matrixViewer.image.compression.mode": {
           "type": "string",
           "default": "auto",
           "enum": ["auto", "always", "never"],
@@ -189,7 +189,7 @@
           ],
           "description": "When to compress image data before sending to the viewer. 'auto' compresses only in remote environments (Remote SSH, WSL, Dev Container)."
         },
-        "matrixViewer.compression.thresholdMB": {
+        "matrixViewer.image.compression.thresholdMB": {
           "type": "number",
           "default": 1,
           "minimum": 0,

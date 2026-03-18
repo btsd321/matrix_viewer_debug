@@ -175,6 +175,22 @@ The **per-debugger layer** ensures that GDB, CodeLLDB, and vsdbg expressions are
 
 ---
 
+## ⚙️ Configuration
+
+All settings are under the `matrixViewer` namespace. Open **Settings** (`Ctrl+,`) and search for `MatrixViewer` to configure them.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `matrixViewer.autoDetect` | `boolean` | `true` | Automatically detect visualizable variables in the current scope each time the debugger pauses. Disable to update the panel manually. |
+| `matrixViewer.autoRefresh` | `boolean` | `true` | Automatically refresh all open viewers when stepping through code. Disable to refresh manually. |
+| `matrixViewer.maxDisplaySize` | `number` | `50` | Maximum image size in megapixels. Images larger than this limit are downsampled before display. |
+| `matrixViewer.defaultColormap` | `string` | `"gray"` | Default colormap applied to single-channel float images. Choices: `gray` · `jet` · `hot` · `viridis` · `plasma`. |
+| `matrixViewer.editorContextMenu` | `boolean` | `true` | Show **Visualize by MatrixViewer** in the editor right-click menu when the cursor is on a visualizable variable during a debug session. |
+| `matrixViewer.image.compression.mode` | `string` | `"auto"` | Controls when image pixel data is compressed (zlib deflate) before being sent to the viewer. `auto` — compress only in remote environments (Remote SSH, WSL, Dev Container); `always` — always compress when above the threshold; `never` — never compress. |
+| `matrixViewer.image.compression.thresholdMB` | `number` | `1` | Minimum raw pixel data size (MB) required before compression is applied. Images smaller than this threshold are always sent uncompressed even when `mode` is `always`. |
+
+---
+
 ## 🙏 Acknowledgments
 
 Inspired by [cv_debug_mate_cpp](https://github.com/dull-bird/cv_debug_mate_cpp) and [Image Watch](https://marketplace.visualstudio.com/items?itemName=VisualCPPTeam.ImageWatch2022) for Visual Studio.
