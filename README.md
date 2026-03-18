@@ -186,8 +186,9 @@ All settings are under the `matrixViewer` namespace. Open **Settings** (`Ctrl+,`
 | `matrixViewer.maxDisplaySize` | `number` | `50` | Maximum image size in megapixels. Images larger than this limit are downsampled before display. |
 | `matrixViewer.defaultColormap` | `string` | `"gray"` | Default colormap applied to single-channel float images. Choices: `gray` · `jet` · `hot` · `viridis` · `plasma`. |
 | `matrixViewer.editorContextMenu` | `boolean` | `true` | Show **Visualize by MatrixViewer** in the editor right-click menu when the cursor is on a visualizable variable during a debug session. |
-| `matrixViewer.image.compression.mode` | `string` | `"auto"` | Controls when image pixel data is compressed (zlib deflate) before being sent to the viewer. `auto` — compress only in remote environments (Remote SSH, WSL, Dev Container); `always` — always compress when above the threshold; `never` — never compress. |
+| `matrixViewer.image.compression.mode` | `string` | `"auto"` | Controls when image pixel data is compressed before being sent to the viewer. `auto` — compress only in remote environments (Remote SSH, WSL, Dev Container); `always` — always compress when above the threshold; `never` — never compress. |
 | `matrixViewer.image.compression.thresholdMB` | `number` | `1` | Minimum raw pixel data size (MB) required before compression is applied. Images smaller than this threshold are always sent uncompressed even when `mode` is `always`. |
+| `matrixViewer.image.compression.algorithm` | `string` | `"auto"` | Compression algorithm. `auto` — selects from 4 tiers by data size (unit = `thresholdMB` T): `[T,2T)` fastest · `[2T,4T)` light · `[4T,8T)` balanced · `[8T,∞)` maximum. Explicit choices: `deflate` · `gzip` · `deflate-raw` (all level 6). |
 
 ---
 

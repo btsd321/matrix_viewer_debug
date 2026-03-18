@@ -63,10 +63,12 @@ export function shouldCompress(rawByteCount: number): boolean {
  * All three are decompressible in the browser via
  * `new DecompressionStream(encoding)` without any third-party library.
  *
- * When algorithm is "auto", getCompressor() selects between:
- *   AUTO_FAST_COMPRESSOR (deflate-raw level 1) — for data below the high threshold
- *   AUTO_BEST_COMPRESSOR (deflate level 9)     — for data at or above the high threshold
- * The high threshold is: thresholdMB × autoHighThresholdFactor.
+ * When algorithm is "auto", getCompressor() selects from four tiers by data size
+ * (boundary = thresholdMB × factor, T = thresholdMB):
+ *   Tier 1 [T,  2T) — deflate-raw level 1: minimum latency
+ *   Tier 2 [2T, 4T) — deflate-raw level 3: light compression
+ *   Tier 3 [4T, 8T) — deflate     level 6: balanced
+ *   Tier 4 [8T,  ∞) — deflate     level 9: maximum compression ratio
  */
 export interface IImageCompressor {
     /** The value written to ImageData.encoding after compression. */
@@ -101,38 +103,39 @@ const COMPRESSORS: Readonly<Record<string, IImageCompressor>> = {
 };
 
 /**
- * Pre-configured compressors used by the "auto" strategy.
- *   AUTO_FAST — deflate-raw level 1: minimum latency, still halves typical RGBA data.
- *   AUTO_BEST — deflate    level 9: maximum compression ratio for very large images.
+ * Four-tier compressor table used by the "auto" strategy.
+ * Ordered highest threshold first so the first matching entry wins.
+ *
+ *   Tier 4 [×8, ∞):  deflate     level 9 — maximum compression ratio
+ *   Tier 3 [×4, ×8): deflate     level 6 — balanced
+ *   Tier 2 [×2, ×4): deflate-raw level 3 — light compression
+ *   Tier 1 [×1, ×2): deflate-raw level 1 — minimum latency  (default / fallback)
  */
-const AUTO_FAST_COMPRESSOR: IImageCompressor = new DeflateRawCompressor(1);
-const AUTO_BEST_COMPRESSOR: IImageCompressor = new DeflateCompressor(9);
-
-/**
- * Multiplier applied to thresholdMB in "auto" mode.
- * When rawBytes ≥ thresholdMB × AUTO_HIGH_FACTOR the best-compression codec is used;
- * below that the fast codec is used instead.
- */
-const AUTO_HIGH_FACTOR = 4;
+const AUTO_TIERS: ReadonlyArray<{ factor: number; compressor: IImageCompressor }> = [
+    { factor: 8, compressor: new DeflateCompressor(9)    },
+    { factor: 4, compressor: new DeflateCompressor(6)    },
+    { factor: 2, compressor: new DeflateRawCompressor(3) },
+    { factor: 1, compressor: new DeflateRawCompressor(1) },
+];
 
 /**
  * Returns the compressor to use for the given raw byte count.
  *
- * When algorithm is "auto":
- *   rawByteCount < thresholdMB × AUTO_HIGH_FACTOR  →  AUTO_FAST_COMPRESSOR
- *   rawByteCount ≥ thresholdMB × AUTO_HIGH_FACTOR  →  AUTO_BEST_COMPRESSOR
+ * When algorithm is "auto", selects from AUTO_TIERS using thresholdMB as the
+ * base unit T.  The first tier whose rawByteCount ≥ T × factor is used.
  *
- * Falls back to DeflateCompressor for unknown algorithm values.
+ * Falls back to DeflateCompressor(6) for unknown algorithm values.
  */
 function getCompressor(rawByteCount: number): IImageCompressor {
     const cfg = vscode.workspace.getConfiguration("matrixViewer");
     const algo = cfg.get<string>("image.compression.algorithm", "auto");
 
     if (algo === "auto") {
-        const thresholdMB = cfg.get<number>("image.compression.thresholdMB", 1);
-        return rawByteCount >= thresholdMB * AUTO_HIGH_FACTOR * 1024 * 1024
-            ? AUTO_BEST_COMPRESSOR
-            : AUTO_FAST_COMPRESSOR;
+        const T = cfg.get<number>("image.compression.thresholdMB", 1) * 1024 * 1024;
+        for (const { factor, compressor } of AUTO_TIERS) {
+            if (rawByteCount >= T * factor) { return compressor; }
+        }
+        return AUTO_TIERS[AUTO_TIERS.length - 1].compressor; // tier 1 fallback
     }
     return COMPRESSORS[algo] ?? COMPRESSORS["deflate"];
 }
