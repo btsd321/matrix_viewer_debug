@@ -178,6 +178,23 @@
           ],
           "description": "Default colormap for single-channel float images"
         },
+        "matrixViewer.compression.mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "always", "never"],
+          "enumDescriptions": [
+            "Compress only when running in a Remote SSH / Dev Container / WSL environment",
+            "Always compress image data regardless of environment",
+            "Never compress image data"
+          ],
+          "description": "When to compress image data before sending to the viewer. 'auto' compresses only in remote environments (Remote SSH, WSL, Dev Container)."
+        },
+        "matrixViewer.compression.thresholdMB": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "Minimum raw pixel data size in megabytes before compression is applied. Images smaller than this threshold are sent uncompressed even when compression is enabled."
+        },
         "matrixViewer.editorContextMenu": {
           "type": "boolean",
           "default": true,

@@ -2,7 +2,14 @@
  * pil/imageProvider.ts — ImageData extraction from PIL.Image.
  *
  * Handles: PIL.Image.Image (any mode: L, RGB, RGBA, P, CMYK, …)
- * Converts to numpy bytes via evaluate to avoid extra file I/O.
+ *
+ * Transfer strategy:
+ *   Compress (remote env / above threshold):
+ *     Python-side: save image to BytesIO as PNG, send bytes via TCP socket.
+ *     Returns ImageData with encoding:"png" — bypasses the DAP 32 K string
+ *     limit that previously could silently truncate large PIL images.
+ *   No-compress (local env / below threshold):
+ *     Existing path: evaluate base64(tobytes()) via DAP.
  */
 
 import * as vscode from "vscode";
@@ -10,6 +17,9 @@ import { VariableInfo } from "../../../../IDebugAdapter";
 import { ImageData, ImageFormat } from "../../../../../viewers/viewerTypes";
 import { ILibImageProvider } from "../../../../ILibProviders";
 import { evaluateExpression } from "../../debugger";
+import { receiveBytesViaTcp } from "../../../../../utils/tcpTransfer";
+import { bufferToBase64 } from "../utils";
+import { shouldCompress } from "../../../../../utils/compressionUtils";
 
 export class PilImageProvider implements ILibImageProvider {
     canHandle(typeName: string): boolean {
@@ -40,7 +50,46 @@ export class PilImageProvider implements ILibImageProvider {
         };
 
         const channels = pilModeToChannels(meta.mode);
+        const rawByteCount = meta.width * meta.height * channels;
 
+        // ── PNG path (remote / above threshold) ───────────────────────────────
+        if (shouldCompress(rawByteCount)) {
+            const pngBuffer = await receiveBytesViaTcp(async (port) => {
+                // Python: save PIL image as PNG into an in-memory BytesIO buffer,
+                // then send the PNG bytes over a localhost socket.
+                const sendExpr =
+                    `(lambda __port:` +
+                    ` (lambda __buf: [` +
+                    `${varName}.save(__buf, format='PNG'),` +
+                    ` (lambda __s: (` +
+                    `__s.connect(('127.0.0.1', __port)),` +
+                    ` __s.sendall(__buf.getvalue()),` +
+                    ` __s.close()))` +
+                    `(__import__('socket').socket())])` +
+                    `(__import__('io').BytesIO()))` +
+                    `(${port})`;
+                return evaluateExpression(session, sendExpr, info.frameId);
+            });
+
+            if (pngBuffer) {
+                return {
+                    b64Bytes: bufferToBase64(pngBuffer),
+                    width: meta.width,
+                    height: meta.height,
+                    channels,
+                    dtype: "uint8",
+                    isUint8: true,
+                    dataMin: 0,
+                    dataMax: 255,
+                    varName,
+                    format: pilModeToFormat(meta.mode),
+                    encoding: "png",
+                };
+            }
+            // Fall through to raw path if TCP transfer failed.
+        }
+
+        // ── Raw bytes path (local / small image / TCP fallback) ───────────────
         const b64Expr =
             `__import__('base64').b64encode(` +
             `__import__('numpy').array(${varName}).tobytes()` +

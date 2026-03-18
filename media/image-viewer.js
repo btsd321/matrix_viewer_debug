@@ -33,6 +33,20 @@
   // BGR and BGRA images need R/B channels swapped before display.
   let swapBGR = (initData.format === "BGR" || initData.format === "BGRA");
 
+  /**
+   * Cached decoded pixel bytes for "raw"/"deflate" encoding.
+   * Cleared when currentData changes; populated lazily on first ensureRawBytes().
+   * @type {Uint8Array|null}
+   */
+  let currentRawBytes = null;
+
+  /**
+   * Cached ImageBitmap for "png" encoding.
+   * Cleared when currentData changes; populated lazily on first ensureBitmap().
+   * @type {ImageBitmap|null}
+   */
+  let currentBitmap = null;
+
   // ── DOM refs ──────────────────────────────────────────────────────────────
 
   const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById("main-canvas"));
@@ -52,21 +66,21 @@
     selColormap.value = colormap;
     chkBGR.checked = swapBGR;
     fitToWindow(currentData);
-    renderImage(currentData);
+    renderImage(currentData).catch(console.error);
     const fmtStr = currentData.format ? `  ${currentData.format}` : "";
     infoLabel.textContent = `${currentData.height}×${currentData.width}  ch:${currentData.channels}  ${currentData.dtype}${fmtStr}`;
 
     chkNormalize.addEventListener("change", () => {
       normalize = chkNormalize.checked;
-      renderImage(currentData);
+      renderImage(currentData).catch(console.error);
     });
     selColormap.addEventListener("change", () => {
       colormap = selColormap.value;
-      renderImage(currentData);
+      renderImage(currentData).catch(console.error);
     });
     chkBGR.addEventListener("change", () => {
       swapBGR = chkBGR.checked;
-      renderImage(currentData);
+      renderImage(currentData).catch(console.error);
     });
     btnReset.addEventListener("click", resetView);
     btnSavePng.addEventListener("click", savePng);
@@ -84,11 +98,22 @@
   // ── Rendering ─────────────────────────────────────────────────────────────
 
   /**
-   * Decode raw bytes → RGBA ImageData → paint to canvas.
-   * @param {ImageData} data
+   * Render the current image onto the canvas.
+   *
+   * Three paths depending on data.encoding:
+   *   "png"              — decompress via ImageBitmap (Python-side PNG encode)
+   *   "deflate"          — decompress via DecompressionStream, then RGBA path
+   *   "raw" / undefined  — existing direct typed-array path
+   *
+   * Decoded results are cached in currentRawBytes / currentBitmap so
+   * repeated zoom/pan renders do not re-decompress.
+   *
+   * @param {Object} data — ImageData object from the extension
+   * @returns {Promise<void>}
    */
-  function renderImage(data) {
-    const { width, height, channels, dtype, b64Bytes, dataMin, dataMax } = data;
+  async function renderImage(data) {
+    const { width, height, channels, dtype, dataMin, dataMax } = data;
+    const encoding = data.encoding;
 
     // Size the canvas to the container so zoom/pan work in the full viewport
     const container = canvas.parentElement;
@@ -97,36 +122,58 @@
     canvas.width  = cw;
     canvas.height = ch;
 
-    // Decode Base64 bytes
-    const binaryStr = atob(b64Bytes);
-    const rawBytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      rawBytes[i] = binaryStr.charCodeAt(i);
-    }
-
-    const pixels = decodeToRGBA(rawBytes, width, height, channels, dtype, dataMin, dataMax);
-    const imageData = new ImageData(pixels, width, height);
-
-    const off = new OffscreenCanvas(width, height);
-    off.getContext("2d").putImageData(imageData, 0, 0);
-
-    // Downsample for display if image exceeds maxDisplaySize megapixels
     const maxMegapixels = window.__matrixViewer.maxDisplaySize ?? 50;
-    let displaySrc = off;
-    if (width * height > maxMegapixels * 1e6) {
-      const scale = Math.sqrt(maxMegapixels * 1e6 / (width * height));
-      const dw = Math.max(1, Math.round(width * scale));
-      const dh = Math.max(1, Math.round(height * scale));
-      const sampled = new OffscreenCanvas(dw, dh);
-      sampled.getContext("2d").drawImage(off, 0, 0, dw, dh);
-      displaySrc = sampled;
-    }
 
-    // Draw onto an offscreen canvas, then transform for zoom/pan
-    ctx.save();
-    ctx.setTransform(zoom, 0, 0, zoom, panX, panY);
-    ctx.drawImage(displaySrc, 0, 0, width, height);
-    ctx.restore();
+    if (encoding === "png") {
+      // ── PNG path ──────────────────────────────────────────────────────────
+      // Pixel bytes were PNG-encoded on the Python side. Decode into an
+      // ImageBitmap (hardware-accelerated) and draw directly.
+      const bmp = await ensureBitmap(data);
+      if (!bmp) { return; }
+
+      let displaySrc = bmp;
+      if (width * height > maxMegapixels * 1e6) {
+        const scale = Math.sqrt(maxMegapixels * 1e6 / (width * height));
+        const dw = Math.max(1, Math.round(width * scale));
+        const dh = Math.max(1, Math.round(height * scale));
+        const sampled = new OffscreenCanvas(dw, dh);
+        sampled.getContext("2d").drawImage(bmp, 0, 0, dw, dh);
+        displaySrc = sampled;
+      }
+
+      ctx.save();
+      ctx.setTransform(zoom, 0, 0, zoom, panX, panY);
+      ctx.drawImage(displaySrc, 0, 0, width, height);
+      ctx.restore();
+
+    } else {
+      // ── raw / deflate path ────────────────────────────────────────────────
+      // Ensure raw pixel bytes are available (decompress if necessary),
+      // then run the full typed-array → RGBA → canvas pipeline.
+      const rawBytes = await ensureRawBytes(data);
+      if (!rawBytes) { return; }
+
+      const pixels = decodeToRGBA(rawBytes, width, height, channels, dtype, dataMin, dataMax);
+      const imageData = new ImageData(pixels, width, height);
+
+      const off = new OffscreenCanvas(width, height);
+      off.getContext("2d").putImageData(imageData, 0, 0);
+
+      let displaySrc = off;
+      if (width * height > maxMegapixels * 1e6) {
+        const scale = Math.sqrt(maxMegapixels * 1e6 / (width * height));
+        const dw = Math.max(1, Math.round(width * scale));
+        const dh = Math.max(1, Math.round(height * scale));
+        const sampled = new OffscreenCanvas(dw, dh);
+        sampled.getContext("2d").drawImage(off, 0, 0, dw, dh);
+        displaySrc = sampled;
+      }
+
+      ctx.save();
+      ctx.setTransform(zoom, 0, 0, zoom, panX, panY);
+      ctx.drawImage(displaySrc, 0, 0, width, height);
+      ctx.restore();
+    }
   }
 
   /**
@@ -172,6 +219,83 @@
     return out;
   }
 
+  // ── Decode helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Decode a base64 string to a Uint8Array (synchronous).
+   * @param {string} b64
+   * @returns {Uint8Array}
+   */
+  function b64ToUint8Array(b64) {
+    const binaryStr = atob(b64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  /**
+   * Decompress a zlib-deflated base64 string using the browser native
+   * DecompressionStream API (no third-party library required).
+   * @param {string} b64 — base64-encoded zlib-compressed bytes
+   * @returns {Promise<Uint8Array>}
+   */
+  async function decompressDeflate(b64) {
+    const compressed = b64ToUint8Array(b64);
+    const ds = new DecompressionStream("deflate");
+    const writer = ds.writable.getWriter();
+    writer.write(compressed);
+    writer.close();
+    const reader = ds.readable.getReader();
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { break; }
+      chunks.push(value);
+    }
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return out;
+  }
+
+  /**
+   * Ensure currentRawBytes is populated for "raw"/"deflate" encoding.
+   * Uses the cached value when available (no re-decompression on zoom/pan).
+   * Returns null when encoding is "png" (bitmap path used instead).
+   * @param {Object} data
+   * @returns {Promise<Uint8Array|null>}
+   */
+  async function ensureRawBytes(data) {
+    if (currentRawBytes) { return currentRawBytes; }
+    if (data.encoding === "png") { return null; }
+    if (data.encoding === "deflate") {
+      currentRawBytes = await decompressDeflate(data.b64Bytes);
+    } else {
+      // "raw" or undefined
+      currentRawBytes = b64ToUint8Array(data.b64Bytes);
+    }
+    return currentRawBytes;
+  }
+
+  /**
+   * Ensure currentBitmap is populated for "png" encoding.
+   * Uses the cached value when available (no re-decode on zoom/pan).
+   * Returns null for "raw"/"deflate" encoding.
+   * @param {Object} data
+   * @returns {Promise<ImageBitmap|null>}
+   */
+  async function ensureBitmap(data) {
+    if (currentBitmap) { return currentBitmap; }
+    if (data.encoding !== "png") { return null; }
+    const bytes = b64ToUint8Array(data.b64Bytes);
+    const blob = new Blob([bytes], { type: "image/png" });
+    currentBitmap = await createImageBitmap(blob);
+    return currentBitmap;
+  }
+
   // ── Interaction ───────────────────────────────────────────────────────────
 
   function onWheel(e) {
@@ -185,7 +309,7 @@
     panX = cx - (cx - panX) * (newZoom / zoom);
     panY = cy - (cy - panY) * (newZoom / zoom);
     zoom = newZoom;
-    renderImage(currentData);
+    renderImage(currentData).catch(console.error);
     broadcastViewport();
   }
 
@@ -199,7 +323,7 @@
     if (isDragging) {
       panX = e.clientX - dragStartX;
       panY = e.clientY - dragStartY;
-      renderImage(currentData);
+      renderImage(currentData).catch(console.error);
       broadcastViewport();
     }
 
@@ -228,21 +352,29 @@
 
   function resetView() {
     fitToWindow(currentData);
-    renderImage(currentData);
+    renderImage(currentData).catch(console.error);
   }
 
   // ── Pixel Inspection ──────────────────────────────────────────────────────
 
   function getPixelValues(x, y) {
-    // Re-read from current rendered ImageData
-    const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = currentData.width;
-    tempCanvas.height = currentData.height;
-    const tempCtx = tempCanvas.getContext("2d");
-    const binaryStr = atob(currentData.b64Bytes);
-    const rawBytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) { rawBytes[i] = binaryStr.charCodeAt(i); }
-    const typed = viewAsTyped(rawBytes, currentData.dtype);
+    if (currentData.encoding === "png") {
+      // PNG path: sample one pixel from the cached bitmap via a 1×1 OffscreenCanvas.
+      if (!currentBitmap) { return ""; }
+      const tmp = new OffscreenCanvas(1, 1);
+      const tc = tmp.getContext("2d");
+      // drawImage with source-rect crops exactly one pixel from the bitmap.
+      tc.drawImage(currentBitmap, x, y, 1, 1, 0, 0, 1, 1);
+      const px = tc.getImageData(0, 0, 1, 1).data; // RGBA, each 0-255
+      const ch = currentData.channels;
+      if (ch === 1) { return `[${px[0]}]`; }
+      if (ch === 4) { return `[${px[0]}, ${px[1]}, ${px[2]}, ${px[3]}]`; }
+      return `[${px[0]}, ${px[1]}, ${px[2]}]`;
+    }
+
+    // raw / deflate path: read from the cached decoded bytes.
+    if (!currentRawBytes) { return ""; }
+    const typed = viewAsTyped(currentRawBytes, currentData.dtype);
     const base = (y * currentData.width + x) * currentData.channels;
     const vals = [];
     for (let c = 0; c < currentData.channels; c++) {
@@ -276,13 +408,22 @@
     const msg = e.data;
     if (msg.type === "update" && msg.data) {
       currentData = msg.data;
-      infoLabel.textContent = `${currentData.height}×${currentData.width}  ch:${currentData.channels}  ${currentData.dtype}`;
-      renderImage(currentData);
+      // Invalidate decode caches so the new data is decoded fresh.
+      currentRawBytes = null;
+      currentBitmap = null;
+      normalize = !currentData.isUint8;
+      chkNormalize.checked = normalize;
+      swapBGR = (currentData.format === "BGR" || currentData.format === "BGRA");
+      chkBGR.checked = swapBGR;
+      const fmtStr = currentData.format ? `  ${currentData.format}` : "";
+      infoLabel.textContent = `${currentData.height}×${currentData.width}  ch:${currentData.channels}  ${currentData.dtype}${fmtStr}`;
+      fitToWindow(currentData);
+      renderImage(currentData).catch(console.error);
     } else if (msg.type === "syncViewport") {
       zoom = msg.zoom;
       panX = msg.panX;
       panY = msg.panY;
-      renderImage(currentData);
+      renderImage(currentData).catch(console.error);
     }
   });
 
