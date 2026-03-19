@@ -2,7 +2,7 @@
   "name": "matrix-viewer",
   "displayName": "MatrixViewer Debug",
   "description": "A Visual Studio Code extension for visualizing 1D/2D/3D data structures during debugging. Supports **Python** and **C++**.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "btsd321",
   "license": "MIT",
   "engines": {
@@ -177,6 +177,36 @@
             "plasma"
           ],
           "description": "Default colormap for single-channel float images"
+        },
+        "matrixViewer.image.compression.algorithm": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "deflate", "gzip", "deflate-raw"],
+          "enumDescriptions": [
+            "Selects from 4 compression tiers by data size (unit = thresholdMB T): [T,2T) fastest · [2T,4T) light · [4T,8T) balanced · [8T,∞) maximum",
+            "zlib deflate (RFC 1950) level 6 — good compression, broadly supported",
+            "gzip (RFC 1952) level 6 — same compression as deflate, slightly larger due to headers",
+            "raw deflate (RFC 1951) level 6 — lowest overhead, fastest decompression"
+          ],
+          "description": "Compression algorithm used when sending image data to the viewer. All algorithms are decompressed in the browser via the native DecompressionStream API."
+        },
+
+        "matrixViewer.image.compression.mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "always", "never"],
+          "enumDescriptions": [
+            "Compress only when running in a Remote SSH / Dev Container / WSL environment",
+            "Always compress image data regardless of environment",
+            "Never compress image data"
+          ],
+          "description": "When to compress image data before sending to the viewer. 'auto' compresses only in remote environments (Remote SSH, WSL, Dev Container)."
+        },
+        "matrixViewer.image.compression.thresholdMB": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "Minimum raw pixel data size in megabytes before compression is applied. Images smaller than this threshold are sent uncompressed even when compression is enabled."
         },
         "matrixViewer.editorContextMenu": {
           "type": "boolean",

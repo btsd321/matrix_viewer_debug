@@ -15,6 +15,7 @@ import { buildPlotWebviewHtml } from "../plot/plotWebview";
 import { buildPointCloudWebviewHtml } from "../pointCloud/pointCloudWebview";
 import { getAdapter } from "../adapters/adapterRegistry";
 import { logger } from "../log/logger";
+import { compressImageData } from "./compressionUtils";
 
 type PanelKind = "image" | "plot" | "pointcloud";
 
@@ -51,8 +52,9 @@ export class PanelManager {
         context: vscode.ExtensionContext,
         syncManager: SyncManager
     ): void {
+        const compressed = compressImageData(data);
         this.openPanel("image", varName, context, (webview) => {
-            webview.html = buildImageWebviewHtml(varName, data, webview, context);
+            webview.html = buildImageWebviewHtml(varName, compressed, webview, context);
         });
         this.setupSyncListener(varName, syncManager);
     }
@@ -116,7 +118,7 @@ export class PanelManager {
                 case "image": {
                     const data = await adapter.fetchImageData(session, entry.varName, info);
                     if (data) {
-                        entry.panel.webview.postMessage({ type: "update", data });
+                        entry.panel.webview.postMessage({ type: "update", data: compressImageData(data) });
                     }
                     break;
                 }

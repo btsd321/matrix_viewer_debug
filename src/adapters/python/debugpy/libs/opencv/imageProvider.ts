@@ -13,6 +13,13 @@
  *
  * Channel order: cv2 uses BGR.  The frontend image-viewer exposes a
  * "Swap R/B" toggle so the user can flip to RGB without any server-side cost.
+ *
+ * Transfer strategy:
+ *   Compress (remote env / above threshold):
+ *     Python-side: encode ndarray to PNG (float→uint8 normalised first),
+ *     send PNG bytes via TCP socket.  Returns encoding:"png".
+ *   No-compress (local env / below threshold):
+ *     Existing path: fetchArrayData (small→JSON, large→TCP raw bytes).
  */
 
 import * as vscode from "vscode";
@@ -22,6 +29,8 @@ import { ILibImageProvider } from "../../../../ILibProviders";
 import { evaluateExpression, fetchArrayData } from "../../debugger";
 import { resolveHWC, computeMinMax, bufferToBase64 } from "../utils";
 import { logger } from "../../../../../log/logger";
+import { receiveBytesViaTcp } from "../../../../../utils/tcpTransfer";
+import { shouldCompress } from "../../../../../utils/compressionUtils";
 
 // ── canHandle patterns ─────────────────────────────────────────────────────
 
@@ -88,7 +97,72 @@ export class OpenCvImageProvider implements ILibImageProvider {
         // cv2 always stores in BGR order
         const format: ImageFormat = channels === 1 ? "GRAY" : channels === 4 ? "BGRA" : "BGR";
 
-        // ── Fetch raw bytes via fetchArrayData (small→JSON, large→TCP) ────────
+        // ── Bytes per element for raw-size estimate ───────────────────────────
+        const bytesPerElem = dtype.includes("64") ? 8 : dtype.includes("32") ? 4 : dtype.includes("16") ? 2 : 1;
+        const rawByteCount = height * width * channels * bytesPerElem;
+
+        // ── PNG path (remote / above threshold) ───────────────────────────────
+        if (shouldCompress(rawByteCount)) {
+            // For float dtypes, normalise to uint8 first so cv2.imencode can
+            // produce a valid PNG.  uint8 data is encoded directly.
+            const encodeExpr = dtype === "uint8"
+                ? `__import__('cv2').imencode('.png', ${ndarrayExpr})[1]`
+                : `__import__('cv2').imencode('.png',` +
+                  ` __import__('cv2').normalize(${ndarrayExpr}, None, 0, 255,` +
+                  ` __import__('cv2').NORM_MINMAX, __import__('cv2').CV_8U))[1]`;
+
+            // Compute original dataMin/dataMax before quantising float data so
+            // the info label can still show the real value range.
+            let dataMin = 0;
+            let dataMax = 255;
+            if (dtype !== "uint8") {
+                const statsJson = await evaluateExpression(
+                    session,
+                    `__import__('json').dumps({'mn': float((${ndarrayExpr}).min()), 'mx': float((${ndarrayExpr}).max())})`,
+                    info.frameId
+                );
+                if (statsJson) {
+                    try {
+                        const js = statsJson.startsWith("'") ? statsJson.slice(1, -1) : statsJson;
+                        const s = JSON.parse(js) as { mn: number; mx: number };
+                        dataMin = s.mn;
+                        dataMax = s.mx;
+                    } catch { /* ignore, keep defaults */ }
+                }
+            }
+
+            const pngBuffer = await receiveBytesViaTcp(async (port) => {
+                const sendExpr =
+                    `(lambda __port:` +
+                    ` (lambda __png:` +
+                    ` (lambda __s: (__s.connect(('127.0.0.1', __port)),` +
+                    ` __s.sendall(__png.tobytes()),` +
+                    ` __s.close()))` +
+                    `(__import__('socket').socket()))` +
+                    `(${encodeExpr}))` +
+                    `(${port})`;
+                return evaluateExpression(session, sendExpr, info.frameId);
+            });
+
+            if (pngBuffer) {
+                return {
+                    b64Bytes: bufferToBase64(pngBuffer),
+                    width,
+                    height,
+                    channels,
+                    dtype: "uint8",
+                    isUint8: true,
+                    dataMin,
+                    dataMax,
+                    varName,
+                    format,
+                    encoding: "png",
+                };
+            }
+            // Fall through to raw path if TCP transfer failed.
+        }
+
+        // ── Raw bytes path (local / small image / TCP fallback) ───────────────
         // Pass ndarrayExpr as varName so fetchArrayData's buildToBytesExpr wraps
         // the conversion expression (e.g. `(v).get()`) with ascontiguousarray().
         const infoForFetch: VariableInfo = {
@@ -102,7 +176,7 @@ export class OpenCvImageProvider implements ILibImageProvider {
             return null;
         }
 
-        const { dataMin, dataMax } = computeMinMax(raw.buffer, dtype);
+        const { dataMin: rawMin, dataMax: rawMax } = computeMinMax(raw.buffer, dtype);
 
         return {
             b64Bytes: bufferToBase64(raw.buffer),
@@ -111,8 +185,8 @@ export class OpenCvImageProvider implements ILibImageProvider {
             channels,
             dtype,
             isUint8: dtype === "uint8",
-            dataMin,
-            dataMax,
+            dataMin: rawMin,
+            dataMax: rawMax,
             varName,
             format,
         };

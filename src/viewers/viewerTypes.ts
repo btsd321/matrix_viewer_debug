@@ -37,6 +37,18 @@ export interface ImageData {
     varName: string;
     /** Channel order of the pixel data; drives auto-init of the BGR toggle */
     format?: ImageFormat;
+    /**
+     * Encoding of b64Bytes:
+     *   "raw"         — flat pixel bytes (default, existing behaviour)
+     *   "deflate"     — zlib deflate compressed bytes (Node.js zlib.deflateSync)
+     *   "gzip"        — gzip compressed bytes (Node.js zlib.gzipSync)
+     *   "deflate-raw" — raw deflate without zlib header (Node.js zlib.deflateRawSync)
+     *   "png"         — full PNG file bytes (Python-side encode)
+     *
+     * All compressed encodings are decompressible via the browser-native
+     * DecompressionStream API without any third-party library.
+     */
+    encoding?: "raw" | "deflate" | "gzip" | "deflate-raw" | "png";
 }
 
 // ── Plot Viewer ───────────────────────────────────────────────────────────

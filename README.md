@@ -2,9 +2,8 @@
 
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.93%2B-blue?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbtsd321%2Fmatrix_viewer_debug%2Fmain%2Fpackage.json&query=%24.version&label=version&color=blue)](https://github.com/btsd321/matrix_viewer_debug)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python)](https://www.python.org/)
+[![Marketplace](https://img.shields.io/badge/VS%20Marketplace-Install-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=btsd321.matrix-viewer)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
-[![debugpy](https://img.shields.io/badge/debugpy-supported-green)](https://github.com/microsoft/debugpy)
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -172,6 +171,23 @@ The **per-debugger layer** ensures that GDB, CodeLLDB, and vsdbg expressions are
 | New **library for Python** (e.g. open3d) | `src/adapters/python/debugpy/libs/<libName>/` |
 | New **library for C++** (e.g. a new OpenCV wrapper) | `src/adapters/cpp/{gdb,codelldb,cppvsdbg}/libs/<libName>/` |
 | New **language** (e.g. Rust) | `src/adapters/<lang>/` + register in `adapterRegistry.ts` |
+
+---
+
+## ⚙️ Configuration
+
+All settings are under the `matrixViewer` namespace. Open **Settings** (`Ctrl+,`) and search for `MatrixViewer` to configure them.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `matrixViewer.autoDetect` | `boolean` | `true` | Automatically detect visualizable variables in the current scope each time the debugger pauses. Disable to update the panel manually. |
+| `matrixViewer.autoRefresh` | `boolean` | `true` | Automatically refresh all open viewers when stepping through code. Disable to refresh manually. |
+| `matrixViewer.maxDisplaySize` | `number` | `50` | Maximum image size in megapixels. Images larger than this limit are downsampled before display. |
+| `matrixViewer.defaultColormap` | `string` | `"gray"` | Default colormap applied to single-channel float images. Choices: `gray` · `jet` · `hot` · `viridis` · `plasma`. |
+| `matrixViewer.editorContextMenu` | `boolean` | `true` | Show **Visualize by MatrixViewer** in the editor right-click menu when the cursor is on a visualizable variable during a debug session. |
+| `matrixViewer.image.compression.mode` | `string` | `"auto"` | Controls when image pixel data is compressed before being sent to the viewer. `auto` — compress only in remote environments (Remote SSH, WSL, Dev Container); `always` — always compress when above the threshold; `never` — never compress. |
+| `matrixViewer.image.compression.thresholdMB` | `number` | `1` | Minimum raw pixel data size (MB) required before compression is applied. Images smaller than this threshold are always sent uncompressed even when `mode` is `always`. |
+| `matrixViewer.image.compression.algorithm` | `string` | `"auto"` | Compression algorithm. `auto` — selects from 4 tiers by data size (unit = `thresholdMB` T): `[T,2T)` fastest · `[2T,4T)` light · `[4T,8T)` balanced · `[8T,∞)` maximum. Explicit choices: `deflate` · `gzip` · `deflate-raw` (all level 6). |
 
 ---
 
