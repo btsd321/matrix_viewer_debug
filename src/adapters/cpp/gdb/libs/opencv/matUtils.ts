@@ -288,14 +288,37 @@ export async function getGpuMatInfo(
     logger.debug(`[getGpuMatInfo] matType=${matType} depth=${depth} channels=${channels}`);
 
     // Download to host heap Mat and get its data pointer.
-    // Try GNU statement expression first (GDB), then lambda (LLDB / vsdbg).
+    // Try multiple expression forms; log each attempt for diagnosis.
     const dlExprs = [
         `(long long)({ cv::Mat* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); _mv_dl->data; })`,
         `(long long)([]{ auto* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); return _mv_dl->data; }())`,
     ];
 
-    logger.debug(`[getGpuMatInfo] trying dlExprs[0]=${dlExprs[0].substring(0, 80)}...`);
-    const dataPtr = await tryGetDataPointer(session, dlExprs, frameId);
+    let dataPtr: string | null = null;
+    for (let i = 0; i < dlExprs.length; i++) {
+        const expr = dlExprs[i];
+        try {
+            const resp = await session.customRequest("evaluate", {
+                expression: expr,
+                frameId: frameId ?? undefined,
+                context: "repl",
+            });
+            logger.debug(`[getGpuMatInfo] dlExpr[${i}] result="${resp?.result}" memoryReference="${resp?.memoryReference}" type="${resp?.type}"`);
+            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
+                dataPtr = resp.memoryReference;
+                break;
+            }
+            const ptrMatch = resp?.result?.match(/0x[0-9a-fA-F]+/);
+            if (ptrMatch && isValidMemoryReference(ptrMatch[0])) {
+                dataPtr = ptrMatch[0];
+                break;
+            }
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.debug(`[getGpuMatInfo] dlExpr[${i}] error: ${msg}`);
+        }
+    }
+
     logger.debug(`[getGpuMatInfo] dataPtr="${dataPtr}"`);
 
     if (!dataPtr) {
