@@ -19,6 +19,21 @@ CC_COMPILER="${CC:-clang}"
 CXX_COMPILER="${CXX:-clang++}"
 
 VCPKG_ROOT="${HOME}/Library/vcpkg"
+
+# ── Parse CLI arguments ───────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --vcpkg)
+            VCPKG_ROOT="$2"
+            shift 2
+            ;;
+        *)
+            echo "[build_llvm] Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
 VCPKG_TOOLCHAIN="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
 
 echo "[build_llvm] Configuring with ${GENERATOR} (${CXX_COMPILER})..."
