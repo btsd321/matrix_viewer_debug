@@ -89,15 +89,27 @@ export class CppAdapter implements IDebugAdapter {
             const eigenVarName = ptrUnwrapped !== null
                 ? (ptrUnwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`)
                 : varName;
+
+            // Build a guard expression that checks whether the pointer is null
+            // BEFORE dereferencing, so GDB evaluates it atomically.  This catches
+            // both genuinely-null pointers and uninitialised stack variables whose
+            // raw pointer field happens to be zero.
+            let guardExpr: string | undefined;
+            if (ptrUnwrapped !== null) {
+                guardExpr = ptrUnwrapped.kind === "lock_deref"
+                    ? `${varName}.expired()`
+                    : `${varName}.get() == 0`;   // shared_ptr / unique_ptr: get() returns T*
+            }
+
             // Skip _evalEigenDim for dimensions known at compile time (e.g. VectorXd
             // has ColsAtCompileTime=1; m_storage.m_cols does not exist at runtime).
             const ctDims = this._parseEigenCompileTimeDims(info.typeName ?? info.type);
             const rows = (ctDims && ctDims[0] > 0)
                 ? ctDims[0]
-                : await this._evalEigenDim(session, eigenVarName, "rows", info.frameId);
+                : await this._evalEigenDim(session, eigenVarName, "rows", info.frameId, guardExpr);
             const cols = (ctDims && ctDims[1] > 0)
                 ? ctDims[1]
-                : await this._evalEigenDim(session, eigenVarName, "cols", info.frameId);
+                : await this._evalEigenDim(session, eigenVarName, "cols", info.frameId, guardExpr);
             if (rows > 0 && cols > 0) {
                 info.shape = [rows, cols];
             }
@@ -111,16 +123,14 @@ export class CppAdapter implements IDebugAdapter {
         session: vscode.DebugSession,
         varName: string,
         prop: "rows" | "cols",
-        frameId?: number
+        frameId?: number,
+        guardExpr?: string
     ): Promise<number> {
         // m_rows / m_cols are Eigen's internal DenseStorage members — accessible
         // even when LLDB cannot call C++ member functions.
         const internalProp = prop === "rows" ? "m_rows" : "m_cols";
-        const exprs = session.type === "lldb"
+        const baseExprs = session.type === "lldb"
             ? [
-                // On Windows/PDB, LLDB cannot JIT-compile function calls (.rows()),
-                // but can access struct fields via memory read (m_storage.m_rows).
-                // Try field access first; fall back to function call for Linux/macOS.
                 `${varName}.m_storage.${internalProp}`,
                 `${varName}.${prop}()`,
                 `(long long)${varName}.${prop}()`,
@@ -130,6 +140,12 @@ export class CppAdapter implements IDebugAdapter {
                 `${varName}.${prop}()`,
                 `(long long)${varName}.${prop}()`,
             ];
+        // When a guard is provided, wrap each expression so GDB evaluates the
+        // null-check and the dimension access atomically — avoids SIGSEGV on
+        // uninitialised smart pointers.
+        const exprs = guardExpr
+            ? baseExprs.map(e => `${guardExpr} ? 0 : (${e})`)
+            : baseExprs;
         for (const expr of exprs) {
             const res = await this._evaluateExpression(session, expr, frameId);
             const n = parseInt(res ?? "");

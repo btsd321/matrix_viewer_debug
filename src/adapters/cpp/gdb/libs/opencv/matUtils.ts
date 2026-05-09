@@ -264,15 +264,11 @@ export async function getGpuMatInfo(
     varName: string,
     frameId?: number
 ): Promise<MatInfo | null> {
-    logger.debug(`[getGpuMatInfo] varName="${varName}" frameId=${frameId}`);
-
     const [rowsRes, colsRes, typeRes] = await Promise.all([
         evaluateExpression(session, `${varName}.rows`, frameId),
         evaluateExpression(session, `${varName}.cols`, frameId),
         evaluateExpression(session, `${varName}.type()`, frameId),
     ]);
-
-    logger.debug(`[getGpuMatInfo] rowsRes="${rowsRes}" colsRes="${colsRes}" typeRes="${typeRes}"`);
 
     const rows = parseInt(rowsRes ?? "0");
     const cols = parseInt(colsRes ?? "0");
@@ -285,41 +281,82 @@ export async function getGpuMatInfo(
     const matType = parseInt(typeRes ?? "0");
     const depth = matType & 7;
     const channels = ((matType >> 3) & 63) + 1;
-    logger.debug(`[getGpuMatInfo] matType=${matType} depth=${depth} channels=${channels}`);
 
-    // Download to host heap Mat and get its data pointer.
-    // Try multiple expression forms; log each attempt for diagnosis.
-    const dlExprs = [
-        `(long long)({ cv::Mat* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); _mv_dl->data; })`,
-        `(long long)([]{ auto* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); return _mv_dl->data; }())`,
-    ];
+    // Download GPU → host without user-code changes.
+    //
+    // GDB's -var-create rejects `new` (heap alloc = side effect).  We try:
+    //   A) malloc raw pixel buffer → temp cv::Mat wrapper → download → read buf
+    //   B) new cv::Mat (works on LLDB / vsdbg where -var-create isn't involved)
+    const dlFrame = frameId ?? undefined;
+    const elemSize = getBytesPerElement(depth);
+    const totalBytes = rows * cols * channels * elemSize;
 
-    let dataPtr: string | null = null;
-    for (let i = 0; i < dlExprs.length; i++) {
-        const expr = dlExprs[i];
-        try {
-            const resp = await session.customRequest("evaluate", {
-                expression: expr,
-                frameId: frameId ?? undefined,
-                context: "repl",
-            });
-            logger.debug(`[getGpuMatInfo] dlExpr[${i}] result="${resp?.result}" memoryReference="${resp?.memoryReference}" type="${resp?.type}"`);
-            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
-                dataPtr = resp.memoryReference;
-                break;
-            }
-            const ptrMatch = resp?.result?.match(/0x[0-9a-fA-F]+/);
-            if (ptrMatch && isValidMemoryReference(ptrMatch[0])) {
-                dataPtr = ptrMatch[0];
-                break;
-            }
-        } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : String(e);
-            logger.debug(`[getGpuMatInfo] dlExpr[${i}] error: ${msg}`);
+    // ── Strategy A: malloc raw pixel buffer ────────────────────────────────
+    const mallocExpr = `(long long)malloc(${totalBytes})`;
+    let bufPtr = "";
+    try {
+        const mr = await session.customRequest("evaluate", {
+            expression: mallocExpr,
+            frameId: dlFrame,
+            context: "repl",
+        });
+        const dec = parseInt(mr?.result ?? "");
+        if (!isNaN(dec) && dec > 0) {
+            bufPtr = "0x" + dec.toString(16);
+        }
+    } catch { /* fall through to strategy B */ }
+
+    if (bufPtr && isValidMemoryReference(bufPtr)) {
+        const dlExpr = `${varName}.download(cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type(), (void*)${bufPtr}))`;
+        const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
+        if (dlRes !== null) {
+            return { rows, cols, channels, depth, dataPtr: bufPtr };
         }
     }
 
-    logger.debug(`[getGpuMatInfo] dataPtr="${dataPtr}"`);
+    // ── Strategy B: heap-allocate cv::Mat with new (LLDB / vsdbg) ─────────
+    const newExprs = [
+        `new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
+        `(long long)new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
+        `reinterpret_cast<long long>(new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()))`,
+    ];
+
+    let matPtr = "";
+    for (const expr of newExprs) {
+        try {
+            const resp = await session.customRequest("evaluate", {
+                expression: expr,
+                frameId: dlFrame,
+                context: "repl",
+            });
+            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
+                matPtr = resp.memoryReference;
+                break;
+            }
+            const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
+            if (hexM && isValidMemoryReference(hexM[0])) {
+                matPtr = hexM[0];
+                break;
+            }
+            const dec = parseInt(resp?.result ?? "");
+            if (!isNaN(dec) && dec > 0) {
+                matPtr = "0x" + dec.toString(16);
+                break;
+            }
+        } catch { /* try next expression */ }
+    }
+
+    if (!matPtr) {
+        logger.warn(`[getGpuMatInfo] failed to allocate host Mat for "${varName}"`);
+        return null;
+    }
+
+    await evaluateExpression(session, `${varName}.download(*(cv::Mat*)${matPtr})`, dlFrame);
+
+    const dataPtr = await tryGetDataPointer(session, [
+        `((cv::Mat*)${matPtr})->data`,
+        `(long long)((cv::Mat*)${matPtr})->data`,
+    ], dlFrame);
 
     if (!dataPtr) {
         logger.warn(`[getGpuMatInfo] failed to resolve data pointer for "${varName}"`);
