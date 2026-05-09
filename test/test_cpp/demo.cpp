@@ -8,6 +8,7 @@
  * Supported types exercised here:
  *
  *   cv::Mat                             → Image Viewer (BGR / GRAY)
+ *   cv::cuda::GpuMat                    → Image Viewer (GPU download)
  *   std::vector<double>                 → Plot Viewer  (1D)
  *   std::vector<cv::Point3f>            → Point Cloud Viewer
  *   std::array<double, N>               → Plot Viewer  (1D)
@@ -27,6 +28,9 @@
  *   std::shared_ptr<cv::Mat>                    → Image Viewer
  *   std::unique_ptr<cv::Mat>                    → Image Viewer
  *   std::weak_ptr<cv::Mat>                      → Image Viewer
+ *   std::shared_ptr<cv::cuda::GpuMat>           → Image Viewer (GPU download)
+ *   std::unique_ptr<cv::cuda::GpuMat>           → Image Viewer (GPU download)
+ *   std::weak_ptr<cv::cuda::GpuMat>             → Image Viewer (GPU download)
  *   std::shared_ptr<std::vector<double>>        → Plot Viewer  (1D)
  *   std::unique_ptr<Eigen::MatrixXd>            → Image Viewer
  *   std::shared_ptr<pcl::PointCloud<...>>       → Point Cloud Viewer
@@ -49,6 +53,7 @@
 
 #ifdef HAVE_OPENCV
 #  include <opencv2/core.hpp>
+#  include <opencv2/core/cuda.hpp>
 #  include <opencv2/imgcodecs.hpp>
 #  include <opencv2/imgproc.hpp>
 #endif
@@ -180,6 +185,14 @@ int main()
             mat_f32.at<float>(r, c)  = static_cast<float>(r * COLS + c) / (ROWS * COLS);
         }
     }
+
+    // cv::cuda::GpuMat  →  Image Viewer (GPU → host download)
+    cv::cuda::GpuMat gpu_bgr(ROWS, COLS, CV_8UC3);
+    cv::cuda::GpuMat gpu_gray(ROWS, COLS, CV_8UC1);
+    cv::cuda::GpuMat gpu_f32(ROWS, COLS, CV_32FC1);
+    gpu_bgr.upload(mat_bgr);
+    gpu_gray.upload(mat_gray);
+    gpu_f32.upload(mat_f32);
 #endif
 
     // =========================================================================
@@ -331,6 +344,18 @@ int main()
 
     // raw pointer cv::Mat*  →  Image Viewer  (deref: (*p_mat))
     cv::Mat* p_mat = &mat_f32;
+
+    // shared_ptr<cv::cuda::GpuMat>  →  Image Viewer  (deref: (*sp_gpu))
+    auto sp_gpu = std::make_shared<cv::cuda::GpuMat>(gpu_bgr);
+
+    // unique_ptr<cv::cuda::GpuMat>  →  Image Viewer  (deref: (*up_gpu))
+    auto up_gpu = std::make_unique<cv::cuda::GpuMat>(gpu_gray);
+
+    // weak_ptr<cv::cuda::GpuMat>  →  Image Viewer  (deref: (*wp_gpu.lock()))
+    std::weak_ptr<cv::cuda::GpuMat> wp_gpu = sp_gpu;
+
+    // raw pointer cv::cuda::GpuMat*  →  Image Viewer  (deref: (*p_gpu))
+    cv::cuda::GpuMat* p_gpu = &gpu_f32;
 #endif
 
     // shared_ptr<std::vector<double>>  →  Plot Viewer (1D)
