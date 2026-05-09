@@ -17,6 +17,7 @@ import {
     tryGetDataPointer,
     buildDataPointerExpressions,
 } from "../../debugger";
+import { logger } from "../../../../../log/logger";
 
 // ── OpenCV depth constants ────────────────────────────────────────────────
 
@@ -300,22 +301,28 @@ export async function getGpuMatInfo(
     varName: string,
     frameId?: number
 ): Promise<MatInfo | null> {
+    logger.debug(`[getGpuMatInfo] varName="${varName}" frameId=${frameId}`);
+
     const [rowsRes, colsRes, typeRes] = await Promise.all([
         evaluateExpression(session, `${varName}.rows`, frameId),
         evaluateExpression(session, `${varName}.cols`, frameId),
         evaluateExpression(session, `${varName}.type()`, frameId),
     ]);
 
+    logger.debug(`[getGpuMatInfo] rowsRes="${rowsRes}" colsRes="${colsRes}" typeRes="${typeRes}"`);
+
     const rows = parseInt(rowsRes ?? "0");
     const cols = parseInt(colsRes ?? "0");
 
     if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
+        logger.warn(`[getGpuMatInfo] invalid dims: rows=${rows} cols=${cols}`);
         return null;
     }
 
     const matType = parseInt(typeRes ?? "0");
     const depth = matType & 7;
     const channels = ((matType >> 3) & 63) + 1;
+    logger.debug(`[getGpuMatInfo] matType=${matType} depth=${depth} channels=${channels}`);
 
     // Download to host heap Mat and get its data pointer.
     // Try GNU statement expression first (GDB), then lambda (LLDB / vsdbg).
@@ -324,8 +331,12 @@ export async function getGpuMatInfo(
         `(long long)([]{ auto* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); return _mv_dl->data; }())`,
     ];
 
+    logger.debug(`[getGpuMatInfo] trying dlExprs[0]=${dlExprs[0].substring(0, 80)}...`);
     const dataPtr = await tryGetDataPointer(session, dlExprs, frameId);
+    logger.debug(`[getGpuMatInfo] dataPtr="${dataPtr}"`);
+
     if (!dataPtr) {
+        logger.warn(`[getGpuMatInfo] failed to resolve data pointer for "${varName}"`);
         return null;
     }
 
