@@ -280,3 +280,54 @@ export async function getMatInfoFromEvaluate(
 
     return { rows, cols, channels, depth, dataPtr };
 }
+
+// ── GpuMat helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Extract cv::cuda::GpuMat metadata and download data to host memory.
+ *
+ * GPU memory is not accessible via DAP readMemory, so this function evaluates
+ * a C++ expression that creates a host cv::Mat, calls GpuMat::download(), and
+ * returns the host data pointer. The host Mat is heap-allocated and persists
+ * for the remainder of the debug session.
+ *
+ * GpuMat uses the same type encoding as cv::Mat::type():
+ *   depth    = type & 7
+ *   channels = ((type >> 3) & 63) + 1
+ */
+export async function getGpuMatInfo(
+    session: vscode.DebugSession,
+    varName: string,
+    frameId?: number
+): Promise<MatInfo | null> {
+    const [rowsRes, colsRes, typeRes] = await Promise.all([
+        evaluateExpression(session, `${varName}.rows`, frameId),
+        evaluateExpression(session, `${varName}.cols`, frameId),
+        evaluateExpression(session, `${varName}.type()`, frameId),
+    ]);
+
+    const rows = parseInt(rowsRes ?? "0");
+    const cols = parseInt(colsRes ?? "0");
+
+    if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
+        return null;
+    }
+
+    const matType = parseInt(typeRes ?? "0");
+    const depth = matType & 7;
+    const channels = ((matType >> 3) & 63) + 1;
+
+    // Download to host heap Mat and get its data pointer.
+    // Try GNU statement expression first (GDB), then lambda (LLDB / vsdbg).
+    const dlExprs = [
+        `(long long)({ cv::Mat* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); _mv_dl->data; })`,
+        `(long long)([]{ auto* _mv_dl = new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()); ${varName}.download(*_mv_dl); return _mv_dl->data; }())`,
+    ];
+
+    const dataPtr = await tryGetDataPointer(session, dlExprs, frameId);
+    if (!dataPtr) {
+        return null;
+    }
+
+    return { rows, cols, channels, depth, dataPtr };
+}

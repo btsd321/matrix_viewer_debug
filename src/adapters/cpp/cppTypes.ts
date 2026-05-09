@@ -19,6 +19,7 @@ import { unwrapSmartPointer } from "./shared/utils";
 const IMAGE_TYPE_PATTERNS = [
     /\bcv::Mat\b/i,
     /\bcv2::Mat\b/i,
+    /\bcv::cuda::GpuMat\b/i,
     // Eigen::Matrix — exclude column vectors (Cols=1) and row vectors (Rows=1).
     // GDB expands VectorXd → Matrix<double,-1,1,0,-1,1> which would otherwise
     // match here and be misclassified as image instead of plot.

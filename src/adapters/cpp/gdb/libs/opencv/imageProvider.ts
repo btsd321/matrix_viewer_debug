@@ -23,12 +23,12 @@ import {
 } from "../../debugger";
 import { getBytesPerElement, cvDepthToDtype } from "./matUtils";
 import { bufferToBase64, computeMinMax } from "../utils";
-import { getMatInfoFromVariables, getMatInfoFromEvaluate } from "./matUtils";
+import { getMatInfoFromVariables, getMatInfoFromEvaluate, getGpuMatInfo } from "./matUtils";
 
 export class OpenCvImageProvider implements ILibImageProvider {
     canHandle(typeName: string): boolean {
-        // cv::Mat, cv::Mat_<T>, cv::UMat — but NOT cv::Matx (handled separately)
-        return /cv::(Mat[^x]|Mat$|UMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
+        // cv::Mat, cv::Mat_<T>, cv::UMat, cv::cuda::GpuMat
+        return /cv::(Mat[^x]|Mat$|UMat|cuda::GpuMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
     }
 
     async fetchImageData(
@@ -36,17 +36,23 @@ export class OpenCvImageProvider implements ILibImageProvider {
         varName: string,
         info: VariableInfo
     ): Promise<ImageData | null> {
-        // ── Step 1: Resolve cv::Mat metadata ─────────────────────────────────
+        // ── Step 1: Resolve metadata ───────────────────────────────────────────
         let matInfo = null;
+        const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
-        // For LLDB (and any debugger with variablesReference), walk children
-        if (info.variablesReference && info.variablesReference > 0) {
-            matInfo = await getMatInfoFromVariables(session, info.variablesReference);
-        }
+        if (isGpuMat) {
+            // GpuMat: GPU memory not accessible via DAP readMemory; download to host
+            matInfo = await getGpuMatInfo(session, varName, info.frameId);
+        } else {
+            // For LLDB (and any debugger with variablesReference), walk children
+            if (info.variablesReference && info.variablesReference > 0) {
+                matInfo = await getMatInfoFromVariables(session, info.variablesReference);
+            }
 
-        // Fallback: evaluate expression-based member access
-        if (!matInfo) {
-            matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            // Fallback: evaluate expression-based member access
+            if (!matInfo) {
+                matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            }
         }
 
         if (!matInfo) {
