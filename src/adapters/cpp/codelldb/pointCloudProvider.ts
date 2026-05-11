@@ -9,7 +9,7 @@ import { ILibPointCloudProvider } from "../../ILibProviders";
 import { PclPointCloudProvider } from "./libs/pcl/pointCloudProvider";
 import { StdPointCloudProvider } from "./libs/std/pointCloudProvider";
 import { QtPointCloudProvider } from "./libs/qt/pointCloudProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibPointCloudProvider[] = [
     new PclPointCloudProvider(),
@@ -28,11 +28,16 @@ export async function fetchLldbPointCloudData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "lldb");
         typeName = unwrapped.innerType;
         // Keep variablesReference: CodeLLDB synthetic formatters expose the
         // pointed-to object's element tree through the smart pointer's reference.
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "lldb"),
+        };
     }
 
     for (const provider of PROVIDERS) {

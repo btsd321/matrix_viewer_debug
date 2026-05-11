@@ -15,7 +15,7 @@ import { EigenImageProvider } from "./libs/eigen/imageProvider";
 import { StdImageProvider } from "./libs/std/imageProvider";
 import { QtImageProvider } from "./libs/qt/imageProvider";
 import { Ros2ImageProvider } from "./libs/ros2/imageProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibImageProvider[] = [
     new OpenCvImageProvider(),
@@ -36,11 +36,15 @@ export async function fetchGdbImageData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        // GDB cannot reliably chain method calls on temporaries (e.g. lock().size()).
-        // For weak_ptr, access the internal raw pointer field _M_ptr (libstdc++) directly.
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}._M_ptr)` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "gdb");
         typeName = unwrapped.innerType;
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType, variablesReference: 0 };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            variablesReference: 0,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "gdb"),
+        };
     }
 
     for (const provider of PROVIDERS) {

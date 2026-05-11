@@ -24,6 +24,7 @@ import {
 import { getBytesPerElement, cvDepthToDtype } from "./matUtils";
 import { bufferToBase64, computeMinMax } from "../utils";
 import { getMatInfoFromVariables, getMatInfoFromEvaluate, getGpuMatInfo } from "./matUtils";
+import { logger } from "../../../../../log/logger";
 
 export class OpenCvImageProvider implements ILibImageProvider {
     canHandle(typeName: string): boolean {
@@ -41,8 +42,11 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
         if (isGpuMat) {
-            // GpuMat: GPU memory not accessible via DAP readMemory; download to host
-            matInfo = await getGpuMatInfo(session, varName, info.frameId);
+            // GpuMat: GPU memory not accessible via DAP readMemory; download to host.
+            // Pass nullGuardExpression so getGpuMatInfo can short-circuit when the
+            // wrapping smart/raw pointer is null (otherwise calling .rows/.cols/.type()
+            // on a *T at this=0x0 segfaults the inferior).
+            matInfo = await getGpuMatInfo(session, varName, info.frameId, info.nullGuardExpression);
         } else {
             // For LLDB (and any debugger with variablesReference), walk children
             if (info.variablesReference && info.variablesReference > 0) {
@@ -70,7 +74,15 @@ export class OpenCvImageProvider implements ILibImageProvider {
 
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
         if (!buffer) {
+            logger.warn(`[OpenCvImageProvider] readMemory returned null for varName="${varName}" dataPtr=${dataPtr} totalBytes=${totalBytes}`);
             return null;
+        }
+
+        if (isGpuMat) {
+            const preview = Array.from(buffer.slice(0, Math.min(16, buffer.length)));
+            let nonZero = 0;
+            for (let i = 0; i < buffer.length; i++) { if (buffer[i] !== 0) { nonZero++; } }
+            logger.info(`[OpenCvImageProvider] GpuMat "${varName}" buffer bytes=${buffer.length} nonZero=${nonZero} firstBytes=[${preview.join(",")}]`);
         }
 
         const dtype = cvDepthToDtype(depth);

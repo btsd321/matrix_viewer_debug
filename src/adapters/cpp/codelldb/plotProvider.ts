@@ -9,7 +9,7 @@ import { ILibPlotProvider } from "../../ILibProviders";
 import { EigenPlotProvider } from "./libs/eigen/plotProvider";
 import { StdPlotProvider } from "./libs/std/plotProvider";
 import { QtPlotProvider } from "./libs/qt/plotProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibPlotProvider[] = [
     new EigenPlotProvider(),
@@ -28,14 +28,19 @@ export async function fetchLldbPlotData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "lldb");
         typeName = unwrapped.innerType;
         // For CodeLLDB, LLDB's synthetic formatters expose smart-pointer children
         // as the pointed-to object's elements ([0], [1], ...).  Keep the original
         // variablesReference so tree-based fallbacks (getVectorSizeFromChildren,
         // getVectorDataPointer) can navigate the element tree when expression
         // evaluation fails (e.g. weak_ptr where .lock() cannot be called).
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "lldb"),
+        };
     }
 
     for (const provider of PROVIDERS) {

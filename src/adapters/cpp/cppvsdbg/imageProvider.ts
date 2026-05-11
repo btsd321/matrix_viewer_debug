@@ -10,7 +10,7 @@ import { OpenCvImageProvider } from "./libs/opencv/imageProvider";
 import { EigenImageProvider } from "./libs/eigen/imageProvider";
 import { StdImageProvider } from "./libs/std/imageProvider";
 import { QtImageProvider } from "./libs/qt/imageProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibImageProvider[] = [
     new OpenCvImageProvider(),
@@ -30,11 +30,15 @@ export async function fetchMsvcImageData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        // MSVC STL: weak_ptr<T> → _Ptr_base<T>::_Ptr is the raw managed pointer.
-        // Avoids chaining methods on the temporary shared_ptr returned by lock().
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}._Ptr)` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "msvc");
         typeName = unwrapped.innerType;
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType, variablesReference: 0 };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            variablesReference: 0,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "msvc"),
+        };
     }
 
     for (const provider of PROVIDERS) {

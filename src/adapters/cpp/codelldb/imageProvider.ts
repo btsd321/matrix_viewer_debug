@@ -10,7 +10,7 @@ import { OpenCvImageProvider } from "./libs/opencv/imageProvider";
 import { EigenImageProvider } from "./libs/eigen/imageProvider";
 import { StdImageProvider } from "./libs/std/imageProvider";
 import { QtImageProvider } from "./libs/qt/imageProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibImageProvider[] = [
     new OpenCvImageProvider(),
@@ -30,11 +30,16 @@ export async function fetchLldbImageData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "lldb");
         typeName = unwrapped.innerType;
         // Keep variablesReference: CodeLLDB synthetic formatters expose the
         // pointed-to object's element tree through the smart pointer's reference.
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "lldb"),
+        };
     }
 
     for (const provider of PROVIDERS) {

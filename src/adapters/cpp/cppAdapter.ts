@@ -41,7 +41,7 @@ import { fetchMsvcImageData } from "./cppvsdbg/imageProvider";
 import { fetchMsvcPlotData } from "./cppvsdbg/plotProvider";
 import { fetchMsvcPointCloudData } from "./cppvsdbg/pointCloudProvider";
 import { enrichMsvcVariableInfo } from "./cppvsdbg/variableInfoEnrichers";
-import { unwrapSmartPointer } from "./shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression, debuggerKindFromSessionType } from "./shared/utils";
 
 export class CppAdapter implements IDebugAdapter {
     isSupportedSession(session: vscode.DebugSession): boolean {
@@ -86,20 +86,18 @@ export class CppAdapter implements IDebugAdapter {
             // If the Eigen object is wrapped in a smart pointer, evaluate dimensions
             // via the dereference expression so member access works correctly.
             const ptrUnwrapped = unwrapSmartPointer(info.typeName ?? info.type);
+            const dbgKind = debuggerKindFromSessionType(session.type);
             const eigenVarName = ptrUnwrapped !== null
-                ? (ptrUnwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`)
+                ? buildDerefExpression(varName, ptrUnwrapped, dbgKind)
                 : varName;
 
             // Build a guard expression that checks whether the pointer is null
-            // BEFORE dereferencing, so GDB evaluates it atomically.  This catches
-            // both genuinely-null pointers and uninitialised stack variables whose
-            // raw pointer field happens to be zero.
-            let guardExpr: string | undefined;
-            if (ptrUnwrapped !== null) {
-                guardExpr = ptrUnwrapped.kind === "lock_deref"
-                    ? `${varName}.expired()`
-                    : `${varName}.get() == 0`;   // shared_ptr / unique_ptr: get() returns T*
-            }
+            // BEFORE dereferencing, so the debugger evaluates it atomically.
+            // Catches both genuinely-null pointers and uninitialised stack
+            // variables whose raw pointer field happens to be zero.
+            const guardExpr = ptrUnwrapped !== null
+                ? buildNullGuardExpression(varName, ptrUnwrapped, dbgKind)
+                : undefined;
 
             // Skip _evalEigenDim for dimensions known at compile time (e.g. VectorXd
             // has ColsAtCompileTime=1; m_storage.m_cols does not exist at runtime).
