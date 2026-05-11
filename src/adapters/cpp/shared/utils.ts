@@ -5,6 +5,10 @@
  * Mirrors the role of src/adapters/python/libs/utils.ts for the C++ side.
  */
 
+import { Buffer } from "node:buffer";
+
+import { Buffer } from "node:buffer";
+
 // ── Smart pointer helpers ─────────────────────────────────────────────────
 
 /**
