@@ -259,30 +259,6 @@ function firstTemplateArg(args: string): string {
     return args.trim();
 }
 
-/**
- * Return the first comma-separated argument of a comma-separated template
- * parameter list, respecting nested `<...>` brackets.
- *
- * Example: `"cv::cuda::GpuMat, std::default_delete<cv::cuda::GpuMat>"`
- *   → `"cv::cuda::GpuMat"`
- *
- * If the input has no top-level comma, returns it unchanged.  Used to peel
- * the deleter off `unique_ptr<T, D>` template arguments before constructing
- * a `T*` cast expression.
- */
-function firstTemplateArg(args: string): string {
-    let depth = 0;
-    for (let i = 0; i < args.length; i++) {
-        const c = args[i];
-        if (c === "<") { depth++; }
-        else if (c === ">") { depth--; }
-        else if (c === "," && depth === 0) {
-            return args.slice(0, i).trim();
-        }
-    }
-    return args.trim();
-}
-
 // ── C++ type helpers ─────────────────────────────────────────────────────
 
 /**
