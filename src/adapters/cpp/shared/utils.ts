@@ -7,9 +7,7 @@
 
 import { Buffer } from "node:buffer";
 
-import { Buffer } from "node:buffer";
-
-// ── Smart pointer helpers ─────────────────────────────────────────────────
+// ── Smart pointer helpers─────────────────────────────────────────────────
 
 /**
  * Describes how to dereference a pointer wrapper in a C++ debug expression.
@@ -171,6 +169,12 @@ export function buildDerefExpression(
     }
 
     if (debuggerKind === "gdb") {
+        // libstdc++ internal layout differs by wrapper:
+        //   shared_ptr / weak_ptr → __shared_ptr base has `_M_ptr`
+        //   unique_ptr            → `_M_t._M_t._M_head_impl` (nested tuple)
+        if (unwrap.wrapper === "unique") {
+            return `(*${varName}._M_t._M_t._M_head_impl)`;
+        }
         return `(*${varName}._M_ptr)`;
     }
     if (debuggerKind === "msvc") {
@@ -202,6 +206,9 @@ export function buildNullGuardExpression(
     }
 
     if (debuggerKind === "gdb") {
+        if (unwrap.wrapper === "unique") {
+            return `${varName}._M_t._M_t._M_head_impl == 0`;
+        }
         return `${varName}._M_ptr == 0`;
     }
     if (debuggerKind === "msvc") {
