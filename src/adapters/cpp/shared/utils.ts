@@ -178,7 +178,8 @@ export function buildDerefExpression(
         //     equals sizeof(T*) and the pointer occupies the object's first
         //     bytes — so `*(T**)&up` reads the raw pointer reliably.
         if (unwrap.wrapper === "unique") {
-            return `(**(${unwrap.innerType}**)&${varName})`;
+            const elemType = firstTemplateArg(unwrap.innerType);
+            return `(**(${elemType}**)&${varName})`;
         }
         return `(*${varName}._M_ptr)`;
     }
@@ -212,7 +213,8 @@ export function buildNullGuardExpression(
 
     if (debuggerKind === "gdb") {
         if (unwrap.wrapper === "unique") {
-            return `*(${unwrap.innerType}**)&${varName} == 0`;
+            const elemType = firstTemplateArg(unwrap.innerType);
+            return `*(${elemType}**)&${varName} == 0`;
         }
         return `${varName}._M_ptr == 0`;
     }
@@ -231,6 +233,54 @@ export function debuggerKindFromSessionType(sessionType: string): DebuggerKind {
     if (sessionType === "lldb") { return "lldb"; }
     if (sessionType === "cppvsdbg") { return "msvc"; }
     return "gdb";
+}
+
+/**
+ * Return the first comma-separated argument of a comma-separated template
+ * parameter list, respecting nested `<...>` brackets.
+ *
+ * Example: `"cv::cuda::GpuMat, std::default_delete<cv::cuda::GpuMat>"`
+ *   → `"cv::cuda::GpuMat"`
+ *
+ * If the input has no top-level comma, returns it unchanged.  Used to peel
+ * the deleter off `unique_ptr<T, D>` template arguments before constructing
+ * a `T*` cast expression.
+ */
+function firstTemplateArg(args: string): string {
+    let depth = 0;
+    for (let i = 0; i < args.length; i++) {
+        const c = args[i];
+        if (c === "<") { depth++; }
+        else if (c === ">") { depth--; }
+        else if (c === "," && depth === 0) {
+            return args.slice(0, i).trim();
+        }
+    }
+    return args.trim();
+}
+
+/**
+ * Return the first comma-separated argument of a comma-separated template
+ * parameter list, respecting nested `<...>` brackets.
+ *
+ * Example: `"cv::cuda::GpuMat, std::default_delete<cv::cuda::GpuMat>"`
+ *   → `"cv::cuda::GpuMat"`
+ *
+ * If the input has no top-level comma, returns it unchanged.  Used to peel
+ * the deleter off `unique_ptr<T, D>` template arguments before constructing
+ * a `T*` cast expression.
+ */
+function firstTemplateArg(args: string): string {
+    let depth = 0;
+    for (let i = 0; i < args.length; i++) {
+        const c = args[i];
+        if (c === "<") { depth++; }
+        else if (c === ">") { depth--; }
+        else if (c === "," && depth === 0) {
+            return args.slice(0, i).trim();
+        }
+    }
+    return args.trim();
 }
 
 // ── C++ type helpers ─────────────────────────────────────────────────────
