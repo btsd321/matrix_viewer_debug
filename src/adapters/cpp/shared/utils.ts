@@ -327,14 +327,7 @@ export function computeMinMax(
 
 /** Encode a Uint8Array to a Base64 string (chunked to avoid stack overflow). */
 export function bufferToBase64(buffer: Uint8Array): string {
-    let binary = "";
-    const chunk = 8192;
-    for (let i = 0; i < buffer.length; i += chunk) {
-        binary += String.fromCharCode(
-            ...buffer.subarray(i, Math.min(i + chunk, buffer.length))
-        );
-    }
-    return btoa(binary);
+    return Buffer.from(buffer).toString("base64");
 }
 
 // ── Stats helpers ─────────────────────────────────────────────────────────
