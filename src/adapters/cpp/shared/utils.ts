@@ -171,9 +171,14 @@ export function buildDerefExpression(
     if (debuggerKind === "gdb") {
         // libstdc++ internal layout differs by wrapper:
         //   shared_ptr / weak_ptr → __shared_ptr base has `_M_ptr`
-        //   unique_ptr            → `_M_t._M_t._M_head_impl` (nested tuple)
+        //   unique_ptr            → no clean field path (the tuple member
+        //     `_M_head_impl` is ambiguous between the pointer and the
+        //     deleter base classes).  Exploit the EBO guarantee instead:
+        //     when Deleter is empty (default_delete is), sizeof(unique_ptr<T>)
+        //     equals sizeof(T*) and the pointer occupies the object's first
+        //     bytes — so `*(T**)&up` reads the raw pointer reliably.
         if (unwrap.wrapper === "unique") {
-            return `(*${varName}._M_t._M_t._M_head_impl)`;
+            return `(**(${unwrap.innerType}**)&${varName})`;
         }
         return `(*${varName}._M_ptr)`;
     }
@@ -207,7 +212,7 @@ export function buildNullGuardExpression(
 
     if (debuggerKind === "gdb") {
         if (unwrap.wrapper === "unique") {
-            return `${varName}._M_t._M_t._M_head_impl == 0`;
+            return `*(${unwrap.innerType}**)&${varName} == 0`;
         }
         return `${varName}._M_ptr == 0`;
     }
