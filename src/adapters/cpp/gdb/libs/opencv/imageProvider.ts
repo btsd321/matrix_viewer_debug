@@ -63,8 +63,34 @@ export class OpenCvImageProvider implements ILibImageProvider {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer, allocatedMat } = matInfo;
+
+        // Free any inferior-side allocation made during GpuMat metadata retrieval.
+        // Strategy A malloc'd a raw buffer; strategy B new'd a cv::Mat. Both must
+        // be released after readMemory or they leak across every visualization.
+        const freeAllocated = async () => {
+            if (allocatedBuffer) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)free((void*)${allocatedBuffer})`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+            if (allocatedMat) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)delete (cv::Mat*)${allocatedMat}`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+        };
+
         if (rows <= 0 || cols <= 0) {
+            await freeAllocated();
             return null;
         }
 
@@ -73,6 +99,7 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const totalBytes = rows * cols * channels * bytesPerElement;
 
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+        await freeAllocated();
         if (!buffer) {
             logger.warn(`[OpenCvImageProvider] readMemory returned null for varName="${varName}" dataPtr=${dataPtr} totalBytes=${totalBytes}`);
             return null;

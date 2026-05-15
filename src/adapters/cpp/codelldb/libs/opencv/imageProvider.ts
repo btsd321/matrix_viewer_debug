@@ -59,8 +59,25 @@ export class OpenCvImageProvider implements ILibImageProvider {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer } = matInfo;
+
+        // Always free the inferior-side host buffer (if any) before returning.
+        // The GpuMat path malloc's a temporary host buffer to receive the
+        // device→host copy; once we've read its bytes, leaving it behind would
+        // leak in the inferior across every visualization.
+        const freeAllocated = async () => {
+            if (!allocatedBuffer) { return; }
+            try {
+                await session.customRequest("evaluate", {
+                    expression: `/nat free((void*)${allocatedBuffer})`,
+                    frameId: info.frameId,
+                    context: "watch",
+                });
+            } catch { /* best-effort: inferior may have detached */ }
+        };
+
         if (rows <= 0 || cols <= 0) {
+            await freeAllocated();
             return null;
         }
 
@@ -69,6 +86,7 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const totalBytes = rows * cols * channels * bytesPerElement;
 
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+        await freeAllocated();
         if (!buffer) {
             return null;
         }

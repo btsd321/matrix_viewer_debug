@@ -87,6 +87,12 @@ export interface MatInfo {
     depth: number;
     /** Hex address string suitable for `readMemory` requests. */
     dataPtr: string;
+    /**
+     * Hex address of a buffer the provider allocated in the inferior via
+     * `malloc` (e.g. for GpuMat host downloads). Caller must `free()` it after
+     * reading the bytes to prevent inferior-side leaks.
+     */
+    allocatedBuffer?: string;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -426,7 +432,7 @@ export async function getGpuMatInfo(
         );
         const retVal = parseInt(cpyResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? cpyResp?.result ?? "-1");
         if (retVal === 0) {
-            return { rows, cols, channels, depth, dataPtr: bufPtr };
+            return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
         }
         logger.warn(
             `[getGpuMatInfo] cudaMemcpy2D failed for "${varName}" (ret=${retVal}) ` +
@@ -440,5 +446,7 @@ export async function getGpuMatInfo(
         );
     }
 
+    // Failure: free the host buffer we malloc'd to avoid leaking it in the inferior.
+    await evalNative(`free((void*)${bufPtr})`);
     return null;
 }

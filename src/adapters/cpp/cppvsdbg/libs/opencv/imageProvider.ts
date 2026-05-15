@@ -59,8 +59,23 @@ export class OpenCvImageProvider implements ILibImageProvider {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer } = matInfo;
+
+        // Free the inferior-side host buffer the GpuMat path malloc'd.
+        // Leaving it behind leaks across every visualization.
+        const freeAllocated = async () => {
+            if (!allocatedBuffer) { return; }
+            try {
+                await session.customRequest("evaluate", {
+                    expression: `(void)free((void*)${allocatedBuffer})`,
+                    frameId: info.frameId,
+                    context: "repl",
+                });
+            } catch { /* best-effort */ }
+        };
+
         if (rows <= 0 || cols <= 0) {
+            await freeAllocated();
             return null;
         }
 
@@ -69,6 +84,7 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const totalBytes = rows * cols * channels * bytesPerElement;
 
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+        await freeAllocated();
         if (!buffer) {
             return null;
         }

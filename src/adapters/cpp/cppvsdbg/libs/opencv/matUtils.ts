@@ -87,6 +87,9 @@ export interface MatInfo {
     depth: number;
     /** Hex address string suitable for `readMemory` requests. */
     dataPtr: string;
+    /** Hex address of an inferior-side host buffer the provider malloc'd
+     *  (GpuMat path). Caller must `free()` it after readMemory. */
+    allocatedBuffer?: string;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -284,14 +287,13 @@ export async function getGpuMatInfo(
 
     // Download GPU → host without user-code changes.
     //
-    // GDB's -var-create rejects `new` (heap alloc = side effect).  We try:
-    //   A) malloc raw pixel buffer → temp cv::Mat wrapper → download → read buf
-    //   B) new cv::Mat (works on LLDB / vsdbg where -var-create isn't involved)
+    // vsdbg expression evaluator does not support `new` / `delete` (per
+    // https://learn.microsoft.com/visualstudio/debugger/expressions-in-the-debugger#unsupported-expressions-in-c),
+    // so we use malloc + a temporary cv::Mat wrapper passed to GpuMat.download().
     const dlFrame = frameId ?? undefined;
     const elemSize = getBytesPerElement(depth);
     const totalBytes = rows * cols * channels * elemSize;
 
-    // ── Strategy A: malloc raw pixel buffer ────────────────────────────────
     const mallocExpr = `(long long)malloc(${totalBytes})`;
     let bufPtr = "";
     try {
@@ -304,64 +306,26 @@ export async function getGpuMatInfo(
         if (!isNaN(dec) && dec > 0) {
             bufPtr = "0x" + dec.toString(16);
         }
-    } catch { /* fall through to strategy B */ }
+    } catch { /* malloc failed */ }
 
-    if (bufPtr && isValidMemoryReference(bufPtr)) {
-        const dlExpr = `${varName}.download(cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type(), (void*)${bufPtr}))`;
-        const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
-        if (dlRes !== null) {
-            return { rows, cols, channels, depth, dataPtr: bufPtr };
-        }
-    }
-
-    // ── Strategy B: heap-allocate cv::Mat with new ─────────────────────────
-    const newExprs = [
-        `new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
-        `(long long)new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
-        `reinterpret_cast<long long>(new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()))`,
-    ];
-
-    let matPtr = "";
-    for (const expr of newExprs) {
-        try {
-            const resp = await session.customRequest("evaluate", {
-                expression: expr,
-                frameId: dlFrame,
-                context: "repl",
-            });
-            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
-                matPtr = resp.memoryReference;
-                break;
-            }
-            const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
-            if (hexM && isValidMemoryReference(hexM[0])) {
-                matPtr = hexM[0];
-                break;
-            }
-            const dec = parseInt(resp?.result ?? "");
-            if (!isNaN(dec) && dec > 0) {
-                matPtr = "0x" + dec.toString(16);
-                break;
-            }
-        } catch { /* try next expression */ }
-    }
-
-    if (!matPtr) {
-        logger.warn(`[getGpuMatInfo] failed to allocate host Mat for "${varName}"`);
+    if (!bufPtr || !isValidMemoryReference(bufPtr)) {
+        logger.warn(`[getGpuMatInfo] malloc failed for "${varName}" (totalBytes=${totalBytes})`);
         return null;
     }
 
-    await evaluateExpression(session, `${varName}.download(*(cv::Mat*)${matPtr})`, dlFrame);
-
-    const dataPtr = await tryGetDataPointer(session, [
-        `((cv::Mat*)${matPtr})->data`,
-        `(long long)((cv::Mat*)${matPtr})->data`,
-    ], dlFrame);
-
-    if (!dataPtr) {
-        logger.warn(`[getGpuMatInfo] failed to resolve data pointer for "${varName}"`);
-        return null;
+    const dlExpr = `${varName}.download(cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type(), (void*)${bufPtr}))`;
+    const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
+    if (dlRes !== null) {
+        return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
     }
 
-    return { rows, cols, channels, depth, dataPtr };
+    logger.warn(`[getGpuMatInfo] download() failed for "${varName}"`);
+    try {
+        await session.customRequest("evaluate", {
+            expression: `(void)free((void*)${bufPtr})`,
+            frameId: dlFrame,
+            context: "repl",
+        });
+    } catch { /* best-effort */ }
+    return null;
 }

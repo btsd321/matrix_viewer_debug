@@ -87,6 +87,12 @@ export interface MatInfo {
     depth: number;
     /** Hex address string suitable for `readMemory` requests. */
     dataPtr: string;
+    /** Hex address of an inferior-side host buffer the provider malloc'd
+     *  (GpuMat strategy A). Caller must `free()` it after readMemory. */
+    allocatedBuffer?: string;
+    /** Hex address of a heap-allocated `cv::Mat*` (GpuMat strategy B).
+     *  Caller must `delete` it after readMemory. */
+    allocatedMat?: string;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -358,12 +364,22 @@ export async function getGpuMatInfo(
             logger.info(`[getGpuMatInfo] strategyA cudaMemcpy2D expr="${cpyExpr}" result="${cpyRes}"`);
             // Success: cudaSuccess == 0
             if (cpyRes !== null && !errRe.test(cpyRes) && /^\s*0\b/.test(cpyRes)) {
-                return { rows, cols, channels, depth, dataPtr: bufPtr };
+                return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
             }
             logger.warn(`[getGpuMatInfo] strategyA cudaMemcpy2D did not return 0; falling back to strategyB`);
         } else {
             logger.warn(`[getGpuMatInfo] strategyA could not read ${varName}.data / ${varName}.step`);
         }
+
+        // Strategy A failed but malloc succeeded — release the buffer before
+        // falling through to strategy B to avoid a leak.
+        try {
+            await session.customRequest("evaluate", {
+                expression: `(void)free((void*)${bufPtr})`,
+                frameId: dlFrame,
+                context: "repl",
+            });
+        } catch { /* best-effort */ }
     }
 
     // ── Strategy B: heap-allocate cv::Mat with new (LLDB / vsdbg) ─────────
@@ -412,8 +428,16 @@ export async function getGpuMatInfo(
 
     if (!dataPtr) {
         logger.warn(`[getGpuMatInfo] failed to resolve data pointer for "${varName}"`);
+        // Release the cv::Mat we new'd to avoid leaking it in the inferior.
+        try {
+            await session.customRequest("evaluate", {
+                expression: `(void)delete (cv::Mat*)${matPtr}`,
+                frameId: dlFrame,
+                context: "repl",
+            });
+        } catch { /* best-effort */ }
         return null;
     }
 
-    return { rows, cols, channels, depth, dataPtr };
+    return { rows, cols, channels, depth, dataPtr, allocatedMat: matPtr };
 }
