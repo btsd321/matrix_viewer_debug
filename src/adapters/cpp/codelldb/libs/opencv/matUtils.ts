@@ -301,104 +301,144 @@ export async function getGpuMatInfo(
     varName: string,
     frameId?: number
 ): Promise<MatInfo | null> {
-    const [rowsRes, colsRes, typeRes] = await Promise.all([
-        evaluateExpression(session, `${varName}.rows`, frameId),
-        evaluateExpression(session, `${varName}.cols`, frameId),
-        evaluateExpression(session, `${varName}.type()`, frameId),
+    // For `(*xxx.lock())` (weak_ptr lock_deref), the simple evaluator can't
+    // invoke `.lock()`. CodeLLDB's weak_ptr synthetic formatter exposes a
+    // `pointer` child of type `T*` — `wp.pointer->field` works directly.
+    // Internal raw-pointer fields (`_M_ptr`/`__ptr_`/`_Ptr`) are NOT visible
+    // through the simple evaluator (the formatter hides them).
+    const lockDeref = varName.match(/^\(\*(.+)\.lock\(\)\)$/);
+    const fieldExpr = (field: string): string => {
+        if (lockDeref) {
+            return `${lockDeref[1]}.pointer->${field}`;
+        }
+        return `${varName}.${field}`;
+    };
+
+    const tryFieldInt = async (field: string): Promise<{ raw: string | null; value: number }> => {
+        const raw = await evaluateExpression(session, fieldExpr(field), frameId);
+        if (raw == null) {
+            return { raw: null, value: NaN };
+        }
+        const v = parseInt(raw.match(/=\s*(-?\d+)/)?.[1] ?? raw);
+        return { raw, value: v };
+    };
+
+    const [rowsR, colsR, flagsR] = await Promise.all([
+        tryFieldInt("rows"),
+        tryFieldInt("cols"),
+        tryFieldInt("flags"),
     ]);
 
-    const rows = parseInt(rowsRes ?? "0");
-    const cols = parseInt(colsRes ?? "0");
+    const rows = rowsR.value;
+    const cols = colsR.value;
 
     if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
-        logger.warn(`[getGpuMatInfo] invalid dims: rows=${rows} cols=${cols}`);
+        logger.warn(`[getGpuMatInfo] invalid dims for "${varName}": rows="${rowsR.raw}" cols="${colsR.raw}" flags="${flagsR.raw}"`);
         return null;
     }
 
-    const matType = parseInt(typeRes ?? "0");
+    const flags = flagsR.value;
+    const matType = flags & 0xfff;
     const depth = matType & 7;
     const channels = ((matType >> 3) & 63) + 1;
 
-    // Download GPU → host without user-code changes.
-    //
-    // GDB's -var-create rejects `new` (heap alloc = side effect).  We try:
-    //   A) malloc raw pixel buffer → temp cv::Mat wrapper → download → read buf
-    //   B) new cv::Mat (works on LLDB / vsdbg where -var-create isn't involved)
+    // CodeLLDB DAP context "watch" + "/nat " prefix invokes the native
+    // (Clang-based) evaluator which supports malloc()/cudaMemcpy2D() etc.
+    // Source: codelldb/src/expressions/mod.rs get_expression_type().
     const dlFrame = frameId ?? undefined;
     const elemSize = getBytesPerElement(depth);
     const totalBytes = rows * cols * channels * elemSize;
 
-    // ── Strategy A: malloc raw pixel buffer ────────────────────────────────
-    const mallocExpr = `(long long)malloc(${totalBytes})`;
-    let bufPtr = "";
-    try {
-        const mr = await session.customRequest("evaluate", {
-            expression: mallocExpr,
-            frameId: dlFrame,
-            context: "watch",
-        });
-        const dec = parseInt(mr?.result ?? "");
-        if (!isNaN(dec) && dec > 0) {
-            bufPtr = "0x" + dec.toString(16);
+    const evalNative = async (expr: string): Promise<{ result?: string; memoryReference?: string } | null> => {
+        try {
+            return await session.customRequest("evaluate", {
+                expression: `/nat ${expr}`,
+                frameId: dlFrame,
+                context: "watch",
+            }) ?? null;
+        } catch {
+            return null;
         }
-    } catch { /* fall through to strategy B */ }
+    };
 
-    if (bufPtr && isValidMemoryReference(bufPtr)) {
-        const dlExpr = `${varName}.download(cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type(), (void*)${bufPtr}))`;
-        const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
-        if (dlRes !== null) {
-            return { rows, cols, channels, depth, dataPtr: bufPtr };
+    const parsePtr = (result?: string | null, memRef?: string): string => {
+        if (memRef && isValidMemoryReference(memRef)) {
+            return memRef;
         }
+        if (!result) {
+            return "";
+        }
+        const hexMatch = result.match(/0x[0-9a-fA-F]+/);
+        if (hexMatch && isValidMemoryReference(hexMatch[0])) {
+            return hexMatch[0];
+        }
+        const decMatch = result.match(/=\s*(-?\d+)/) ?? result.match(/^\s*(-?\d+)/);
+        const dec = decMatch ? parseInt(decMatch[1]) : NaN;
+        if (!isNaN(dec) && dec > 0) {
+            return "0x" + dec.toString(16);
+        }
+        return "";
+    };
+
+    const mallocResp = await evalNative(`(long long)malloc(${totalBytes})`);
+    const bufPtr = parsePtr(mallocResp?.result, mallocResp?.memoryReference);
+    if (!bufPtr || !isValidMemoryReference(bufPtr)) {
+        logger.warn(`[getGpuMatInfo] malloc failed for "${varName}" (totalBytes=${totalBytes})`);
+        return null;
     }
 
-    // ── Strategy B: heap-allocate cv::Mat with new ─────────────────────────
-    const newExprs = [
-        `new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
-        `(long long)new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
-        `reinterpret_cast<long long>(new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()))`,
-    ];
-
-    let matPtr = "";
-    for (const expr of newExprs) {
+    // Preferred: cudaMemcpy2D direct device→host copy.
+    // GpuMat.download() fails because LLDB's Clang can't disambiguate
+    // cv::Mat(int,int,int,void*) against the (int,int,int,Scalar&) overload.
+    //
+    // Pointer reads must NOT use /nat through shared_ptr — the native evaluator
+    // can't invoke shared_ptr::operator*() and returns wrapper-internal bytes.
+    // The simple evaluator's synthetic formatter resolves `(*sp_gpu).data`
+    // correctly but pretty-prints `unsigned char *` as a string (the `result`
+    // field becomes "" when the GPU memory isn't readable as text). The DAP
+    // `memoryReference` field on the same response carries the raw address.
+    const evalSimple = async (expr: string) => {
         try {
-            const resp = await session.customRequest("evaluate", {
+            return await session.customRequest("evaluate", {
                 expression: expr,
                 frameId: dlFrame,
                 context: "watch",
-            });
-            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
-                matPtr = resp.memoryReference;
-                break;
-            }
-            const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
-            if (hexM && isValidMemoryReference(hexM[0])) {
-                matPtr = hexM[0];
-                break;
-            }
-            const dec = parseInt(resp?.result ?? "");
-            if (!isNaN(dec) && dec > 0) {
-                matPtr = "0x" + dec.toString(16);
-                break;
-            }
-        } catch { /* try next expression */ }
+            }) ?? null;
+        } catch {
+            return null;
+        }
+    };
+
+    const tryFieldResp = async (field: string) => evalSimple(fieldExpr(field));
+
+    const [srcResp, stepResp] = await Promise.all([
+        tryFieldResp("data"),
+        tryFieldResp("step"),
+    ]);
+    const srcPtr = parsePtr(srcResp?.result, srcResp?.memoryReference);
+    const stepDec = parseInt(stepResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? stepResp?.result ?? "0");
+
+    if (srcPtr && isValidMemoryReference(srcPtr) && stepDec > 0) {
+        const widthBytes = cols * channels * elemSize;
+        const kindD2H = 2; // cudaMemcpyDeviceToHost
+        const cpyResp = await evalNative(
+            `(int)cudaMemcpy2D((void*)${bufPtr}, ${widthBytes}, (void*)${srcPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`
+        );
+        const retVal = parseInt(cpyResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? cpyResp?.result ?? "-1");
+        if (retVal === 0) {
+            return { rows, cols, channels, depth, dataPtr: bufPtr };
+        }
+        logger.warn(
+            `[getGpuMatInfo] cudaMemcpy2D failed for "${varName}" (ret=${retVal}) ` +
+            `srcPtr=${srcPtr} step=${stepDec} widthBytes=${widthBytes} rows=${rows}`
+        );
+    } else {
+        logger.warn(
+            `[getGpuMatInfo] could not resolve GPU pointer/step for "${varName}": ` +
+            `srcPtr="${srcPtr}" step=${stepDec} ` +
+            `srcResp=${JSON.stringify(srcResp)} stepResp=${JSON.stringify(stepResp)}`
+        );
     }
 
-    if (!matPtr) {
-        logger.warn(`[getGpuMatInfo] failed to allocate host Mat for "${varName}"`);
-        return null;
-    }
-
-    await evaluateExpression(session, `${varName}.download(*(cv::Mat*)${matPtr})`, dlFrame);
-
-    const dataPtr = await tryGetDataPointer(session, [
-        `((cv::Mat*)${matPtr})->data`,
-        `(long long)((cv::Mat*)${matPtr})->data`,
-    ], dlFrame);
-
-    if (!dataPtr) {
-        logger.warn(`[getGpuMatInfo] failed to resolve data pointer for "${varName}"`);
-        return null;
-    }
-
-    return { rows, cols, channels, depth, dataPtr };
+    return null;
 }
