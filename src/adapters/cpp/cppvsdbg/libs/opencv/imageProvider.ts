@@ -41,8 +41,17 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
         if (isGpuMat) {
-            // GpuMat: GPU memory not accessible via DAP readMemory; download to host
+            // GpuMat: GPU memory not accessible via DAP readMemory; download to host.
+            // NOTE: vsdbg (MSVC) fundamentally cannot download GPU data because its
+            // expression evaluator blocks all external function calls (CRT, CUDA, etc.).
+            // See the detailed log for each strategy's failure reason.
             matInfo = await getGpuMatInfo(session, varName, info.frameId);
+            if (!matInfo) {
+                vscode.window.showWarningMessage(
+                    `MatrixViewer: Cannot download cv::cuda::GpuMat data with vsdbg (MSVC debugger). Use GDB/CodeLLDB or NVIDIA Nsight for GPU visualization.`
+                );
+                return null;
+            }
         } else {
             // For LLDB (and any debugger with variablesReference), walk children
             if (info.variablesReference && info.variablesReference > 0) {
