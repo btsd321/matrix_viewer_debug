@@ -358,7 +358,6 @@ export async function getGpuMatInfo(
     // Source: codelldb/src/expressions/mod.rs get_expression_type().
     const dlFrame = frameId ?? undefined;
     const elemSize = getBytesPerElement(depth);
-    const totalBytes = rows * cols * channels * elemSize;
 
     const evalNative = async (expr: string): Promise<{ result?: string; memoryReference?: string } | null> => {
         try {
@@ -391,17 +390,6 @@ export async function getGpuMatInfo(
         return "";
     };
 
-    const mallocResp = await evalNative(`(long long)malloc(${totalBytes})`);
-    const bufPtr = parsePtr(mallocResp?.result, mallocResp?.memoryReference);
-    if (!bufPtr || !isValidMemoryReference(bufPtr)) {
-        logger.warn(`[getGpuMatInfo] malloc failed for "${varName}" (totalBytes=${totalBytes})`);
-        return null;
-    }
-
-    // Preferred: cudaMemcpy2D direct device→host copy.
-    // GpuMat.download() fails because LLDB's Clang can't disambiguate
-    // cv::Mat(int,int,int,void*) against the (int,int,int,Scalar&) overload.
-    //
     // Pointer reads must NOT use /nat through shared_ptr — the native evaluator
     // can't invoke shared_ptr::operator*() and returns wrapper-internal bytes.
     // The simple evaluator's synthetic formatter resolves `(*sp_gpu).data`
@@ -429,82 +417,54 @@ export async function getGpuMatInfo(
     const srcPtr = parsePtr(srcResp?.result, srcResp?.memoryReference);
     const stepDec = parseInt(stepResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? stepResp?.result ?? "0");
 
-    if (srcPtr && isValidMemoryReference(srcPtr) && stepDec > 0) {
-        const widthBytes = cols * channels * elemSize;
-        const kindD2H = 2; // cudaMemcpyDeviceToHost
-
-        logger.debug(
-            `[getGpuMatInfo] attempting cudaMemcpy2D: bufPtr=${bufPtr} widthBytes=${widthBytes} ` +
-            `srcPtr=${srcPtr} stepDec=${stepDec} rows=${rows} totalBytes=${totalBytes}`
-        );
-        logger.debug(
-            `[getGpuMatInfo] srcResp=${JSON.stringify(srcResp)} stepResp=${JSON.stringify(stepResp)}`
-        );
-
-        // Verify CUDA context is active and pointer is valid device memory
-        const ptrAttrResp = await evalNative(
-            `(int)cudaPointerGetAttributes((void*)0, (void*)${srcPtr})`
-        );
-        logger.debug(`[getGpuMatInfo] cudaPointerGetAttributes result=${JSON.stringify(ptrAttrResp)}`);
-
-        // Try cudaMemcpy2D first
-        const cpyResp = await evalNative(
-            `(int)cudaMemcpy2D((void*)${bufPtr}, ${widthBytes}, (void*)${srcPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`
-        );
-        logger.debug(`[getGpuMatInfo] cudaMemcpy2D response=${JSON.stringify(cpyResp)}`);
-        const retVal = parseInt(cpyResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? cpyResp?.result ?? "-1");
-        if (retVal === 0) {
-            return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
-        }
-        logger.warn(
-            `[getGpuMatInfo] cudaMemcpy2D failed for "${varName}" (ret=${retVal}) ` +
-            `srcPtr=${srcPtr} step=${stepDec} widthBytes=${widthBytes} rows=${rows}`
-        );
-
-        // Fallback: flat cudaMemcpy with stride-aware host buffer.
-        // When step > widthBytes, GPU rows have padding. We copy the full
-        // pitched region (step * rows) to host and let the caller strip padding
-        // using the returned `step` field.
-        {
-            const pitchedBytes = stepDec * rows;
-            logger.debug(`[getGpuMatInfo] trying flat cudaMemcpy fallback (pitchedBytes=${pitchedBytes})`);
-
-            // Free the small buffer and allocate one large enough for pitched data
-            await evalNative(`free((void*)${bufPtr})`);
-            const bigMallocResp = await evalNative(`(long long)malloc(${pitchedBytes})`);
-            const bigBufPtr = parsePtr(bigMallocResp?.result, bigMallocResp?.memoryReference);
-            if (!bigBufPtr || !isValidMemoryReference(bigBufPtr)) {
-                logger.warn(`[getGpuMatInfo] malloc(${pitchedBytes}) failed for pitched fallback`);
-                return null;
-            }
-
-            const flatResp = await evalNative(
-                `(int)cudaMemcpy((void*)${bigBufPtr}, (void*)${srcPtr}, (long long)${pitchedBytes}, ${kindD2H})`
-            );
-            logger.debug(`[getGpuMatInfo] cudaMemcpy response=${JSON.stringify(flatResp)}`);
-            const flatRet = parseInt(flatResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? flatResp?.result ?? "-1");
-            if (flatRet !== 0) {
-                logger.warn(`[getGpuMatInfo] flat cudaMemcpy also failed (ret=${flatRet})`);
-                await evalNative(`free((void*)${bigBufPtr})`);
-                return null;
-            }
-
-            return {
-                rows, cols, channels, depth,
-                dataPtr: bigBufPtr,
-                allocatedBuffer: bigBufPtr,
-                step: stepDec > widthBytes ? stepDec : undefined,
-            };
-        }
-    } else {
+    if (!srcPtr || !isValidMemoryReference(srcPtr) || stepDec <= 0) {
         logger.warn(
             `[getGpuMatInfo] could not resolve GPU pointer/step for "${varName}": ` +
-            `srcPtr="${srcPtr}" step=${stepDec} ` +
-            `srcResp=${JSON.stringify(srcResp)} stepResp=${JSON.stringify(stepResp)}`
+            `srcPtr="${srcPtr}" step=${stepDec}`
         );
+        return null;
     }
 
-    // Failure: free the host buffer we malloc'd to avoid leaking it in the inferior.
+    const widthBytes = cols * channels * elemSize;
+    const kindD2H = 2; // cudaMemcpyDeviceToHost
+    const pitchedBytes = stepDec * rows;
+
+    const mallocResp = await evalNative(`(long long)malloc(${pitchedBytes})`);
+    const bufPtr = parsePtr(mallocResp?.result, mallocResp?.memoryReference);
+    if (!bufPtr || !isValidMemoryReference(bufPtr)) {
+        logger.warn(`[getGpuMatInfo] malloc(${pitchedBytes}) failed for "${varName}"`);
+        return null;
+    }
+
+    // Prefer flat cudaMemcpy — cudaMemcpy2D returns cudaErrorInvalidValue
+    // in CodeLLDB's /nat evaluator on Windows.
+    // Copy the full pitched region (step * rows); caller strips row padding
+    // using the returned `step` field.
+    const flatResp = await evalNative(
+        `(int)cudaMemcpy((void*)${bufPtr}, (void*)${srcPtr}, (long long)${pitchedBytes}, ${kindD2H})`
+    );
+    const flatRet = parseInt(flatResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? flatResp?.result ?? "-1");
+    if (flatRet === 0) {
+        return {
+            rows, cols, channels, depth,
+            dataPtr: bufPtr,
+            allocatedBuffer: bufPtr,
+            step: stepDec > widthBytes ? stepDec : undefined,
+        };
+    }
+
+    logger.warn(`[getGpuMatInfo] cudaMemcpy failed for "${varName}" (ret=${flatRet})`);
+
+    // Fallback: cudaMemcpy2D in case a future CodeLLDB version fixes it
+    const cpyResp = await evalNative(
+        `(int)cudaMemcpy2D((void*)${bufPtr}, ${widthBytes}, (void*)${srcPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`
+    );
+    const retVal = parseInt(cpyResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? cpyResp?.result ?? "-1");
+    if (retVal === 0) {
+        return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
+    }
+
+    logger.warn(`[getGpuMatInfo] all CUDA copy strategies failed for "${varName}"`);
     await evalNative(`free((void*)${bufPtr})`);
     return null;
 }
