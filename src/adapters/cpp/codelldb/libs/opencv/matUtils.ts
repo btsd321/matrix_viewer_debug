@@ -93,6 +93,11 @@ export interface MatInfo {
      * reading the bytes to prevent inferior-side leaks.
      */
     allocatedBuffer?: string;
+    /**
+     * Row pitch in bytes (step). When set and larger than cols*channels*elemSize,
+     * the buffer contains padding that must be stripped after reading.
+     */
+    step?: number;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -427,9 +432,26 @@ export async function getGpuMatInfo(
     if (srcPtr && isValidMemoryReference(srcPtr) && stepDec > 0) {
         const widthBytes = cols * channels * elemSize;
         const kindD2H = 2; // cudaMemcpyDeviceToHost
+
+        logger.debug(
+            `[getGpuMatInfo] attempting cudaMemcpy2D: bufPtr=${bufPtr} widthBytes=${widthBytes} ` +
+            `srcPtr=${srcPtr} stepDec=${stepDec} rows=${rows} totalBytes=${totalBytes}`
+        );
+        logger.debug(
+            `[getGpuMatInfo] srcResp=${JSON.stringify(srcResp)} stepResp=${JSON.stringify(stepResp)}`
+        );
+
+        // Verify CUDA context is active and pointer is valid device memory
+        const ptrAttrResp = await evalNative(
+            `(int)cudaPointerGetAttributes((void*)0, (void*)${srcPtr})`
+        );
+        logger.debug(`[getGpuMatInfo] cudaPointerGetAttributes result=${JSON.stringify(ptrAttrResp)}`);
+
+        // Try cudaMemcpy2D first
         const cpyResp = await evalNative(
             `(int)cudaMemcpy2D((void*)${bufPtr}, ${widthBytes}, (void*)${srcPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`
         );
+        logger.debug(`[getGpuMatInfo] cudaMemcpy2D response=${JSON.stringify(cpyResp)}`);
         const retVal = parseInt(cpyResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? cpyResp?.result ?? "-1");
         if (retVal === 0) {
             return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
@@ -438,6 +460,42 @@ export async function getGpuMatInfo(
             `[getGpuMatInfo] cudaMemcpy2D failed for "${varName}" (ret=${retVal}) ` +
             `srcPtr=${srcPtr} step=${stepDec} widthBytes=${widthBytes} rows=${rows}`
         );
+
+        // Fallback: flat cudaMemcpy with stride-aware host buffer.
+        // When step > widthBytes, GPU rows have padding. We copy the full
+        // pitched region (step * rows) to host and let the caller strip padding
+        // using the returned `step` field.
+        {
+            const pitchedBytes = stepDec * rows;
+            logger.debug(`[getGpuMatInfo] trying flat cudaMemcpy fallback (pitchedBytes=${pitchedBytes})`);
+
+            // Free the small buffer and allocate one large enough for pitched data
+            await evalNative(`free((void*)${bufPtr})`);
+            const bigMallocResp = await evalNative(`(long long)malloc(${pitchedBytes})`);
+            const bigBufPtr = parsePtr(bigMallocResp?.result, bigMallocResp?.memoryReference);
+            if (!bigBufPtr || !isValidMemoryReference(bigBufPtr)) {
+                logger.warn(`[getGpuMatInfo] malloc(${pitchedBytes}) failed for pitched fallback`);
+                return null;
+            }
+
+            const flatResp = await evalNative(
+                `(int)cudaMemcpy((void*)${bigBufPtr}, (void*)${srcPtr}, (long long)${pitchedBytes}, ${kindD2H})`
+            );
+            logger.debug(`[getGpuMatInfo] cudaMemcpy response=${JSON.stringify(flatResp)}`);
+            const flatRet = parseInt(flatResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? flatResp?.result ?? "-1");
+            if (flatRet !== 0) {
+                logger.warn(`[getGpuMatInfo] flat cudaMemcpy also failed (ret=${flatRet})`);
+                await evalNative(`free((void*)${bigBufPtr})`);
+                return null;
+            }
+
+            return {
+                rows, cols, channels, depth,
+                dataPtr: bigBufPtr,
+                allocatedBuffer: bigBufPtr,
+                step: stepDec > widthBytes ? stepDec : undefined,
+            };
+        }
     } else {
         logger.warn(
             `[getGpuMatInfo] could not resolve GPU pointer/step for "${varName}": ` +

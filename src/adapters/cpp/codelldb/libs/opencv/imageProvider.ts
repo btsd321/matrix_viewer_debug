@@ -83,12 +83,27 @@ export class OpenCvImageProvider implements ILibImageProvider {
 
         // ── Step 2: Read pixel bytes via readMemory ───────────────────────────
         const bytesPerElement = getBytesPerElement(depth);
-        const totalBytes = rows * cols * channels * bytesPerElement;
+        const widthBytes = cols * channels * bytesPerElement;
+        const totalBytes = rows * widthBytes;
+        const step = matInfo.step;
 
-        const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+        // When step is set, the buffer has row padding that must be stripped.
+        const readBytes = step ? step * rows : totalBytes;
+        const rawBuffer = await readMemoryChunked(session, dataPtr, readBytes);
         await freeAllocated();
-        if (!buffer) {
+        if (!rawBuffer) {
             return null;
+        }
+
+        let buffer: Uint8Array;
+        if (step && step > widthBytes) {
+            // Strip per-row padding: extract only the first widthBytes from each row
+            buffer = new Uint8Array(totalBytes);
+            for (let r = 0; r < rows; r++) {
+                buffer.set(rawBuffer.subarray(r * step, r * step + widthBytes), r * widthBytes);
+            }
+        } else {
+            buffer = rawBuffer;
         }
 
         const dtype = cvDepthToDtype(depth);
