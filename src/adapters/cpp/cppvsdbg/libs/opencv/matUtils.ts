@@ -17,6 +17,7 @@ import {
     tryGetDataPointer,
     buildDataPointerExpressions,
     readMemoryChunked,
+    getLoadedModules,
 } from "../../debugger";
 import { logger } from "../../../../../log/logger";
 
@@ -312,81 +313,157 @@ export async function getGpuMatInfo(
     const elemSize = getBytesPerElement(depth);
     const totalBytes = rows * cols * channels * elemSize;
 
-    // ── Strategy A: heap-allocate cv::Mat via `new`, then GpuMat::download ──
+    // vsdbg's EE explicitly rejects `new` ("Operator 'new' is not supported.")
+    // and `free`/`malloc` (CRT exports lack a usable PDB by default). It DOES
+    // accept:
+    //   - constructor-style temporaries `Type(args)`
+    //   - function calls into modules whose PDB is loaded
+    //   - the context operator `{,,module.dll}symbol` to disambiguate
+    //     symbols not visible from the current frame's scope
+    //     (https://learn.microsoft.com/en-us/visualstudio/debugger/context-operator-cpp)
     //
-    // vsdbg's EE supports `new T(args)` and method calls into modules that
-    // ship a PDB. OpenCV's debug DLL (opencv_world*d.dll built with vcpkg
-    // or upstream) does ship symbols, so `new cv::Mat(rows, cols, type)`
-    // and `gpu.download(*pMat)` are both reachable. Once the host Mat is
-    // populated we read its `.data` pointer and let the caller readMemory
-    // it, then `delete` the Mat. This is the same path the GDB adapter
-    // uses (see gdb/libs/opencv/matUtils.ts) and the only one that does
-    // not depend on cudart/ucrtbase symbols.
-    const newExprs = [
-        `(long long)new cv::Mat(${rows}, ${cols}, ${matType})`,
-        `reinterpret_cast<long long>(new cv::Mat(${rows}, ${cols}, ${matType}))`,
-        `new cv::Mat(${rows}, ${cols}, ${matType})`,
+    // Bare `cv::fastMalloc` resolves to "identifier ... is undefined" when the
+    // current TU never references the symbol, even though OpenCV's PDB is
+    // loaded — the EE only searches the active frame's scope. We work around
+    // this by enumerating loaded modules and trying each OpenCV DLL with a
+    // module-qualified expression.
+
+    const errRe = /(Operator|Cannot evaluate|cannot evaluate|may be inlined|No type information|no symbol|No matching|undefined|error C|side effects|is undefined|no instance|matches the argument|argument list|cannot be invoked|invalid argument|expression must|class .* has no member|incomplete type|ambiguous)/i;
+
+    const isOpenCvModule = (name: string): boolean => {
+        const n = name.toLowerCase();
+        return /^opencv_/i.test(n) || /opencv_world/i.test(n) || /opencv_core/i.test(n);
+    };
+
+    const allModules = await getLoadedModules(session);
+    const opencvModules = allModules.filter(isOpenCvModule);
+    logger.info(`[getGpuMatInfo] loaded modules: ${allModules.length} total, OpenCV candidates=${JSON.stringify(opencvModules)}`);
+    if (opencvModules.length === 0 && allModules.length > 0) {
+        // Surface a small sample to help the user diagnose missing symbols.
+        const preview = allModules.slice(0, 20).join(", ");
+        logger.info(`[getGpuMatInfo] no OpenCV module matched; sample of loaded modules: ${preview}${allModules.length > 20 ? ", …" : ""}`);
+    }
+
+    // ── Strategy A: cv::fastMalloc + cv::Mat(r,c,t,buf) + GpuMat::download ──
+    // Try unqualified first (works if the EE happens to find the symbol),
+    // then each OpenCV DLL via the context operator.
+    let bufPtr = "";
+    let allocModule = ""; // module that successfully resolved cv::fastMalloc
+
+    const buildAllocExprs = (mod: string): string[] => {
+        const ctx = mod ? `{,,${mod}}` : "";
+        return [
+            `(long long)${ctx}cv::fastMalloc(${totalBytes})`,
+            `(void*)${ctx}cv::fastMalloc(${totalBytes})`,
+            `${ctx}cv::fastMalloc(${totalBytes})`,
+        ];
+    };
+
+    const allocCandidates: { mod: string; exprs: string[] }[] = [
+        { mod: "", exprs: buildAllocExprs("") },
+        ...opencvModules.map((m) => ({ mod: m, exprs: buildAllocExprs(m) })),
     ];
 
-    let matPtr = "";
-    for (const expr of newExprs) {
-        try {
-            const resp = await session.customRequest("evaluate", {
-                expression: expr,
-                frameId: dlFrame,
-                context: "repl",
-            });
-            logger.info(`[getGpuMatInfo] new expr="${expr}" result="${resp?.result}" memRef="${resp?.memoryReference}"`);
-            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
-                matPtr = resp.memoryReference;
-                break;
+    outer: for (const { mod, exprs } of allocCandidates) {
+        for (const expr of exprs) {
+            try {
+                const resp = await session.customRequest("evaluate", {
+                    expression: expr,
+                    frameId: dlFrame,
+                    context: "repl",
+                });
+                logger.info(`[getGpuMatInfo] alloc mod="${mod}" expr="${expr}" result="${resp?.result}" memRef="${resp?.memoryReference}"`);
+                if (resp?.result && errRe.test(resp.result)) {
+                    continue;
+                }
+                if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
+                    bufPtr = resp.memoryReference;
+                    allocModule = mod;
+                    break outer;
+                }
+                const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
+                if (hexM && isValidMemoryReference(hexM[0])) {
+                    bufPtr = hexM[0];
+                    allocModule = mod;
+                    break outer;
+                }
+                const dec = parseInt(resp?.result ?? "");
+                if (!isNaN(dec) && dec > 0) {
+                    const hex = "0x" + dec.toString(16);
+                    if (isValidMemoryReference(hex)) {
+                        bufPtr = hex;
+                        allocModule = mod;
+                        break outer;
+                    }
+                }
+            } catch (e) {
+                logger.warn(`[getGpuMatInfo] alloc threw for "${expr}": ${e}`);
             }
-            const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
-            if (hexM && isValidMemoryReference(hexM[0])) {
-                matPtr = hexM[0];
-                break;
-            }
-            const dec = parseInt(resp?.result ?? "");
-            if (!isNaN(dec) && dec > 0) {
-                matPtr = "0x" + dec.toString(16);
-                break;
-            }
-        } catch (e) {
-            logger.warn(`[getGpuMatInfo] new threw for "${expr}": ${e}`);
         }
     }
 
-    if (matPtr) {
-        const dlExpr = `${varName}.download(*(cv::Mat*)${matPtr})`;
-        const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
-        logger.info(`[getGpuMatInfo] download expr="${dlExpr}" result="${dlRes}"`);
+    if (bufPtr) {
+        logger.info(`[getGpuMatInfo] host buffer allocated: bufPtr="${bufPtr}" via module="${allocModule || "<scope>"}" totalBytes=${totalBytes}`);
 
-        const dataPtr = await tryGetDataPointer(session, [
-            `((cv::Mat*)${matPtr})->data`,
-            `(long long)((cv::Mat*)${matPtr})->data`,
-            `reinterpret_cast<long long>(((cv::Mat*)${matPtr})->data)`,
-        ], dlFrame);
-
-        if (dataPtr) {
-            return { rows, cols, channels, depth, dataPtr, allocatedMat: matPtr };
+        // Build a temporary cv::Mat that wraps our externally-owned buffer.
+        // The Mat header lives only for the duration of the evaluate call,
+        // but `download(OutputArray)` writes through to the buffer we own,
+        // so the data survives. The temporary Mat does NOT free the buffer
+        // because it was constructed with an external `data` pointer.
+        //
+        // We pass `step` explicitly. The `Mat(rows, cols, type, void*)`
+        // overload uses a default argument of `AUTO_STEP`, but vsdbg's EE
+        // does not always resolve class-static defaults, leading to
+        // "no instance of constructor matches" even when the symbol exists.
+        // Passing the compact-row stride `cols * channels * elemSize`
+        // sidesteps this entirely.
+        const stepBytes = cols * channels * elemSize;
+        const matExpr = `cv::Mat(${rows}, ${cols}, ${matType}, (void*)${bufPtr}, ${stepBytes})`;
+        const matExprNoStep = `cv::Mat(${rows}, ${cols}, ${matType}, (void*)${bufPtr})`;
+        const dlExprs = [
+            `${varName}.download(${matExpr})`,
+            `${varName}.download(cv::_OutputArray(${matExpr}))`,
+            `${varName}.download(${matExprNoStep})`,
+        ];
+        let downloadOk = false;
+        for (const dlExpr of dlExprs) {
+            const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
+            logger.info(`[getGpuMatInfo] download expr="${dlExpr}" result="${dlRes}"`);
+            if (dlRes !== null && dlRes !== "" && !errRe.test(dlRes)) {
+                downloadOk = true;
+                break;
+            }
         }
 
-        logger.warn(`[getGpuMatInfo] failed to resolve data pointer after download for "${varName}"`);
-        try {
-            await session.customRequest("evaluate", {
-                expression: `(void)delete (cv::Mat*)${matPtr}`,
-                frameId: dlFrame,
-                context: "repl",
-            });
-        } catch { /* best-effort */ }
+        if (downloadOk) {
+            return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
+        }
+
+        logger.warn(`[getGpuMatInfo] download failed for "${varName}"; freeing buffer`);
+        const ctx = allocModule ? `{,,${allocModule}}` : "";
+        for (const freeExpr of [
+            `(void)${ctx}cv::fastFree((void*)${bufPtr})`,
+            `${ctx}cv::fastFree((void*)${bufPtr})`,
+        ]) {
+            try {
+                const r = await session.customRequest("evaluate", {
+                    expression: freeExpr,
+                    frameId: dlFrame,
+                    context: "repl",
+                });
+                logger.info(`[getGpuMatInfo] free expr="${freeExpr}" result="${r?.result}"`);
+                if (r?.result !== undefined && !errRe.test(r.result)) { break; }
+            } catch { /* best-effort */ }
+        }
     } else {
-        logger.warn(`[getGpuMatInfo] strategy A could not heap-allocate cv::Mat for "${varName}" (likely missing OpenCV PDB)`);
+        logger.warn(`[getGpuMatInfo] cv::fastMalloc unreachable for "${varName}". Loaded module count=${allModules.length}, OpenCV candidates=${opencvModules.length}. Check that opencv_world*d.dll (or opencv_core*d.dll) is loaded with PDB symbols.`);
     }
 
     // ── Strategy B: readMemory on device pointer ───────────────────────────
     // Only succeeds when a CUDA-aware debugger (e.g. NVIDIA Nsight VSCE) is
     // attached. Cheap to attempt and harmless when it fails.
     const dataRes = await evaluateExpression(session, `(long long)${varName}.data`, frameId);
+    logger.info(`[getGpuMatInfo] strategyB device data=${dataRes}`);
     const dataDec = parseInt(dataRes ?? "0");
     if (!isNaN(dataDec) && dataDec > 0) {
         const devPtr = "0x" + dataDec.toString(16);
@@ -395,9 +472,11 @@ export async function getGpuMatInfo(
             if (raw) {
                 logger.info(`[getGpuMatInfo] readMemory on device pointer succeeded for "${varName}"`);
                 return { rows, cols, channels, depth, dataPtr: devPtr };
+            } else {
+                logger.info(`[getGpuMatInfo] readMemory on device pointer returned null (no CUDA-aware debugger attached)`);
             }
         } catch (e) {
-            logger.info(`[getGpuMatInfo] readMemory on device pointer failed: ${e}`);
+            logger.info(`[getGpuMatInfo] readMemory on device pointer threw: ${e}`);
         }
     }
 

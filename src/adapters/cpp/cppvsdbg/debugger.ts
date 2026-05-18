@@ -80,6 +80,42 @@ export async function evaluateExpression(
     ]);
 }
 
+// ── Loaded modules ────────────────────────────────────────────────────────
+
+/**
+ * Return the file name (e.g. "opencv_world480d.dll") of every loaded module.
+ * Used by lib providers to build vsdbg context-operator expressions like
+ * `{,,opencv_world480d.dll}cv::fastMalloc(...)` when the EE cannot find a
+ * symbol in the current frame's scope.
+ *
+ * Returns an empty array if the debugger does not respond to the `modules`
+ * request or returns no modules.
+ */
+export async function getLoadedModules(
+    session: vscode.DebugSession
+): Promise<string[]> {
+    try {
+        const resp = await session.customRequest("modules", {
+            startModule: 0,
+            moduleCount: 1000,
+        });
+        const modules: { name?: string; path?: string }[] = resp?.modules ?? [];
+        const names: string[] = [];
+        for (const m of modules) {
+            // Prefer `name` (just the file name); fall back to last path segment.
+            let n = m.name?.trim() ?? "";
+            if (!n && m.path) {
+                const idx = Math.max(m.path.lastIndexOf("\\"), m.path.lastIndexOf("/"));
+                n = idx >= 0 ? m.path.slice(idx + 1) : m.path;
+            }
+            if (n) { names.push(n); }
+        }
+        return names;
+    } catch {
+        return [];
+    }
+}
+
 // ── Variable enumeration ─────────────────────────────────────────────────
 
 /**

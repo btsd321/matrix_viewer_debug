@@ -42,14 +42,15 @@ export class OpenCvImageProvider implements ILibImageProvider {
 
         if (isGpuMat) {
             // GpuMat: GPU memory not accessible via DAP readMemory.
-            // We heap-allocate a host cv::Mat in the inferior, call
-            // GpuMat::download() to populate it, then readMemory the host
-            // buffer. Requires OpenCV's debug DLL to ship a PDB.
+            // We allocate a host buffer in the inferior with cv::fastMalloc,
+            // wrap it in a temporary cv::Mat, call GpuMat::download() to
+            // populate it, then readMemory the host buffer.
+            // Requires OpenCV's debug DLL to ship a PDB.
             // See matUtils.getGpuMatInfo for the full strategy chain.
             matInfo = await getGpuMatInfo(session, varName, info.frameId, info.nullGuardExpression);
             if (!matInfo) {
                 vscode.window.showWarningMessage(
-                    `MatrixViewer: Cannot download cv::cuda::GpuMat data with vsdbg. Make sure OpenCV is built with debug symbols (PDB), or use GDB / CodeLLDB / NVIDIA Nsight for GPU visualization.`
+                    `MatrixViewer: Cannot download cv::cuda::GpuMat data with vsdbg. Make sure OpenCV's debug DLL (with PDB) is loaded, or use GDB / CodeLLDB / NVIDIA Nsight for GPU visualization.`
                 );
                 return null;
             }
@@ -71,14 +72,17 @@ export class OpenCvImageProvider implements ILibImageProvider {
 
         const { rows, cols, channels, depth, dataPtr, allocatedBuffer, allocatedMat } = matInfo;
 
-        // Free any inferior-side allocation made during GpuMat metadata retrieval.
-        // Strategy A `new`s a cv::Mat; legacy paths may have malloc'd a buffer.
-        // Both must be released after readMemory or they leak across visualizations.
+        // Free inferior-side allocations from the GpuMat path.
+        // - allocatedBuffer: host buffer from cv::fastMalloc → cv::fastFree
+        // - allocatedMat: heap cv::Mat (legacy / future) → delete
+        // vsdbg's EE rejects `new`/`delete` and `free()` (the CRT export has
+        // no PDB), so we must use cv::fastFree which is exported by the
+        // OpenCV debug DLL.
         const freeAllocated = async () => {
             if (allocatedBuffer) {
                 try {
                     await session.customRequest("evaluate", {
-                        expression: `(void)free((void*)${allocatedBuffer})`,
+                        expression: `(void)cv::fastFree((void*)${allocatedBuffer})`,
                         frameId: info.frameId,
                         context: "repl",
                     });
