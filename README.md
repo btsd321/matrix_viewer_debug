@@ -141,6 +141,14 @@ or use the Command Palette (`Ctrl+Shift+P`) → **MatrixViewer: View by MatrixVi
 1. Download `.vsix` file
 2. Extensions view (`Ctrl+Shift+X`) → `...` → "Install from VSIX..."
 
+### Build from Source
+
+```bash
+npm install              # Install dependencies
+npm run compile          # Type-check + lint + bundle
+npx vsce package        # Package into .vsix file
+```
+
 ---
 
 ## 📋 Requirements

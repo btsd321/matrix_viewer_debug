@@ -141,6 +141,14 @@
 1. 下载 `.vsix` 文件
 2. 扩展视图（`Ctrl+Shift+X`）→ `...` → "从 VSIX 安装..."
 
+### 从源码构建
+
+```bash
+npm install              # 安装依赖
+npm run compile          # 类型检查 + lint + 打包
+npx vsce package        # 生成 .vsix 文件
+```
+
 ---
 
 ## 📋 系统要求
