@@ -41,14 +41,15 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
         if (isGpuMat) {
-            // GpuMat: GPU memory not accessible via DAP readMemory; download to host.
-            // NOTE: vsdbg (MSVC) fundamentally cannot download GPU data because its
-            // expression evaluator blocks all external function calls (CRT, CUDA, etc.).
-            // See the detailed log for each strategy's failure reason.
-            matInfo = await getGpuMatInfo(session, varName, info.frameId);
+            // GpuMat: GPU memory not accessible via DAP readMemory.
+            // We heap-allocate a host cv::Mat in the inferior, call
+            // GpuMat::download() to populate it, then readMemory the host
+            // buffer. Requires OpenCV's debug DLL to ship a PDB.
+            // See matUtils.getGpuMatInfo for the full strategy chain.
+            matInfo = await getGpuMatInfo(session, varName, info.frameId, info.nullGuardExpression);
             if (!matInfo) {
                 vscode.window.showWarningMessage(
-                    `MatrixViewer: Cannot download cv::cuda::GpuMat data with vsdbg (MSVC debugger). Use GDB/CodeLLDB or NVIDIA Nsight for GPU visualization.`
+                    `MatrixViewer: Cannot download cv::cuda::GpuMat data with vsdbg. Make sure OpenCV is built with debug symbols (PDB), or use GDB / CodeLLDB / NVIDIA Nsight for GPU visualization.`
                 );
                 return null;
             }
@@ -68,19 +69,30 @@ export class OpenCvImageProvider implements ILibImageProvider {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr, allocatedBuffer } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer, allocatedMat } = matInfo;
 
-        // Free the inferior-side host buffer the GpuMat path malloc'd.
-        // Leaving it behind leaks across every visualization.
+        // Free any inferior-side allocation made during GpuMat metadata retrieval.
+        // Strategy A `new`s a cv::Mat; legacy paths may have malloc'd a buffer.
+        // Both must be released after readMemory or they leak across visualizations.
         const freeAllocated = async () => {
-            if (!allocatedBuffer) { return; }
-            try {
-                await session.customRequest("evaluate", {
-                    expression: `(void)free((void*)${allocatedBuffer})`,
-                    frameId: info.frameId,
-                    context: "repl",
-                });
-            } catch { /* best-effort */ }
+            if (allocatedBuffer) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)free((void*)${allocatedBuffer})`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+            if (allocatedMat) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)delete (cv::Mat*)${allocatedMat}`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
         };
 
         if (rows <= 0 || cols <= 0) {

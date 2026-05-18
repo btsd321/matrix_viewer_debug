@@ -91,6 +91,9 @@ export interface MatInfo {
     /** Hex address of an inferior-side host buffer the provider malloc'd
      *  (GpuMat path). Caller must `free()` it after readMemory. */
     allocatedBuffer?: string;
+    /** Hex address of an inferior-side `cv::Mat*` heap-allocated via `new`
+     *  (GpuMat path). Caller must `delete` it after readMemory. */
+    allocatedMat?: string;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -266,232 +269,136 @@ export async function getMatInfoFromEvaluate(
 export async function getGpuMatInfo(
     session: vscode.DebugSession,
     varName: string,
-    frameId?: number
+    frameId?: number,
+    nullGuardExpression?: string
 ): Promise<MatInfo | null> {
-    logger.info(`[getGpuMatInfo] >>> varName="${varName}" frameId=${frameId}`);
+    logger.info(`[getGpuMatInfo] >>> varName="${varName}" frameId=${frameId} guard="${nullGuardExpression ?? ""}"`);
 
-    // Read GpuMat metadata via member fields (NOT method calls).  vsdbg cannot
-    // call methods that lack debug info (inlined / cross-module); member access
-    // via the debug-info-provided layout is reliable.
-    const [rowsRes, colsRes, flagsRes, dataRes, stepRes] = await Promise.all([
+    // ── Step 0: short-circuit when the wrapping pointer is null ────────────
+    // Without this, calling `${varName}.rows` on `*(T*)nullptr` would segfault
+    // the inferior. Match GDB's behavior: bail out when the guard says null.
+    if (nullGuardExpression) {
+        const guardRes = await evaluateExpression(session, nullGuardExpression, frameId);
+        logger.info(`[getGpuMatInfo] guard "${nullGuardExpression}" -> "${guardRes}"`);
+        if (guardRes !== null && /^\s*(true|1)\b/i.test(guardRes)) {
+            logger.warn(`[getGpuMatInfo] underlying pointer is null/empty; bailing out`);
+            return null;
+        }
+    }
+
+    // Read GpuMat metadata via member fields. flags is more reliable than
+    // type() because vsdbg's EE prefers field access over method dispatch.
+    const [rowsRes, colsRes, flagsRes] = await Promise.all([
         evaluateExpression(session, `${varName}.rows`, frameId),
         evaluateExpression(session, `${varName}.cols`, frameId),
         evaluateExpression(session, `${varName}.flags`, frameId),
-        evaluateExpression(session, `${varName}.data`, frameId),
-        evaluateExpression(session, `${varName}.step`, frameId),
     ]);
-    logger.info(`[getGpuMatInfo] raw evals rows="${rowsRes}" cols="${colsRes}" flags="${flagsRes}" data="${dataRes}" step="${stepRes}"`);
+    logger.info(`[getGpuMatInfo] raw evals rows="${rowsRes}" cols="${colsRes}" flags="${flagsRes}"`);
 
     const rows = parseInt(rowsRes ?? "0");
     const cols = parseInt(colsRes ?? "0");
-
     if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
         logger.warn(`[getGpuMatInfo] invalid dims: rows=${rows} cols=${cols}`);
         return null;
     }
 
-    // GpuMat::type() is `flags & 0xFFF` — same encoding as cv::Mat.
     const flags = parseInt(flagsRes ?? "0");
     const matType = flags & 0xfff;
     const depth = matType & 7;
     const channels = ((matType >> 3) & 63) + 1;
     logger.info(`[getGpuMatInfo] decoded rows=${rows} cols=${cols} flags=${flags} matType=${matType} depth=${depth} channels=${channels}`);
 
-    // Resolve device pointer and step from member values.
-    const dataDec = parseInt(dataRes ?? "0");
-    const stepDec = parseInt(stepRes ?? "0");
-    if (isNaN(dataDec) || dataDec <= 0 || isNaN(stepDec) || stepDec <= 0) {
-        logger.warn(`[getGpuMatInfo] invalid device ptr or step: data=${dataDec} step=${stepDec}`);
-        return null;
-    }
-    const devPtr = "0x" + dataDec.toString(16);
-    logger.info(`[getGpuMatInfo] devPtr="${devPtr}" step=${stepDec}`);
-
-    // Download GPU → host without calling functions from system DLLs.
-    //
-    // vsdbg cannot resolve type signatures for functions in modules that lack
-    // debug info (ucrtbase.dll, kernel32.dll, cudart, etc.).  Even function-
-    // pointer casts don't help — the EE must resolve the symbol before the
-    // cast applies.  `new`/`delete` are also unsupported per MS docs.
-    //
-    // Strategies we try, in order:
-    //   A) Use the GpuMat's own stack address as a scratch buffer.  The space
-    //      well below the variable on the stack is unused while execution is
-    //      paused; we compute `&varName - totalBytes - 4096` and download
-    //      directly into that region.  No allocation call needed.
-    //   B) Try allocation through OpenCV's own exported allocators
-    //      (cv::fastMalloc / cvAlloc).  These live in the OpenCV DLL, which
-    //      vcpkg debug builds may ship with PDB symbols.
     const dlFrame = frameId ?? undefined;
     const elemSize = getBytesPerElement(depth);
     const totalBytes = rows * cols * channels * elemSize;
 
-    // ── Strategy A: stack scratch via &varName ────────────────────────────
-    let bufPtr = "";
-    try {
-        const addrRes = await session.customRequest("evaluate", {
-            expression: `(long long)&${varName}`,
-            frameId: dlFrame,
-            context: "repl",
-        });
-        logger.info(`[getGpuMatInfo] &"${varName}" result="${addrRes?.result}"`);
-        const varAddr = parseInt(addrRes?.result ?? "");
-        if (!isNaN(varAddr) && varAddr > 0x1000) {
-            // Place the scratch buffer 4096 bytes below the variable.
-            // This avoids other locals while staying within the stack.
-            const bufAddr = varAddr - totalBytes - 4096;
-            if (bufAddr > 0x1000) {
-                bufPtr = "0x" + bufAddr.toString(16);
-                logger.info(`[getGpuMatInfo] strategy A stack buf: varAddr=0x${varAddr.toString(16)} bufPtr="${bufPtr}"`);
-            }
-        }
-    } catch (e) {
-        logger.warn(`[getGpuMatInfo] &"${varName}" threw: ${e}`);
-    }
-
-    // ── Strategy B: OpenCV allocators ─────────────────────────────────────
-    if (!bufPtr) {
-        const ocvAllocExprs = [
-            `(long long)cv::fastMalloc(${totalBytes})`,
-            `(long long)cvAlloc(${totalBytes})`,
-            `(void*)cv::fastMalloc(${totalBytes})`,
-            `(void*)cvAlloc(${totalBytes})`,
-        ];
-        for (const expr of ocvAllocExprs) {
-            try {
-                const mr = await session.customRequest("evaluate", {
-                    expression: expr,
-                    frameId: dlFrame,
-                    context: "repl",
-                });
-                logger.info(`[getGpuMatInfo] ocvAlloc expr="${expr}" result="${mr?.result}" memRef="${mr?.memoryReference}"`);
-                if (mr?.memoryReference && isValidMemoryReference(mr.memoryReference)) {
-                    bufPtr = mr.memoryReference;
-                    logger.info(`[getGpuMatInfo] ocvAlloc success via memoryReference: "${bufPtr}"`);
-                    break;
-                }
-                const hexMatch = (mr?.result ?? "").match(/0x[0-9a-fA-F]+/);
-                if (hexMatch && isValidMemoryReference(hexMatch[0])) {
-                    bufPtr = hexMatch[0];
-                    logger.info(`[getGpuMatInfo] ocvAlloc success via hex: "${bufPtr}"`);
-                    break;
-                }
-                const dec = parseInt(mr?.result ?? "");
-                if (!isNaN(dec) && dec > 0) {
-                    const hex = "0x" + dec.toString(16);
-                    if (isValidMemoryReference(hex)) {
-                        bufPtr = hex;
-                        logger.info(`[getGpuMatInfo] ocvAlloc success via decimal: "${bufPtr}"`);
-                        break;
-                    }
-                }
-            } catch (e) {
-                logger.warn(`[getGpuMatInfo] ocvAlloc threw for "${expr}": ${e}`);
-            }
-        }
-    }
-
-    // ── Strategy C: CRT allocators (may work if user linked debug CRT) ────
-    if (!bufPtr) {
-        const crtAllocExprs = [
-            `(long long)malloc(${totalBytes})`,
-            `(long long){,,ucrtbased.dll}malloc(${totalBytes})`,
-            `(void*)malloc(${totalBytes})`,
-        ];
-        for (const expr of crtAllocExprs) {
-            try {
-                const mr = await session.customRequest("evaluate", {
-                    expression: expr,
-                    frameId: dlFrame,
-                    context: "repl",
-                });
-                logger.info(`[getGpuMatInfo] CRT alloc expr="${expr}" result="${mr?.result}" memRef="${mr?.memoryReference}"`);
-                if (mr?.memoryReference && isValidMemoryReference(mr.memoryReference)) {
-                    bufPtr = mr.memoryReference;
-                    break;
-                }
-                const hexMatch = (mr?.result ?? "").match(/0x[0-9a-fA-F]+/);
-                if (hexMatch && isValidMemoryReference(hexMatch[0])) {
-                    bufPtr = hexMatch[0];
-                    break;
-                }
-                const dec = parseInt(mr?.result ?? "");
-                if (!isNaN(dec) && dec > 0) {
-                    const hex = "0x" + dec.toString(16);
-                    if (isValidMemoryReference(hex)) { bufPtr = hex; }
-                    break;
-                }
-            } catch { /* continue */ }
-        }
-        if (bufPtr) {
-            logger.info(`[getGpuMatInfo] CRT alloc success: "${bufPtr}"`);
-        }
-    }
-
-    if (!bufPtr) {
-        logger.warn(`[getGpuMatInfo] all allocation strategies failed for "${varName}" (totalBytes=${totalBytes})`);
-        return null;
-    }
-
-    // ── Download: copy GPU → host buffer ──────────────────────────────────
+    // ── Strategy A: heap-allocate cv::Mat via `new`, then GpuMat::download ──
     //
-    // The EE cannot call C++ constructors nor find symbols from static libs
-    // that lack public visibility (e.g. cudart_static).  We probe what's
-    // callable and try every available path.
-    const hostPitch = cols * channels * elemSize;
-    const widthBytes = cols * channels * elemSize;
-    const kindD2H = 2; // cudaMemcpyDeviceToHost
-    const errRe = /(Cannot evaluate|No type information|error:|syntax error|no instance|no symbol|undefined)/i;
-
-    // ── Diagnostic: probe what CUDA symbols are reachable ────────────────
-    const diagExprs = [
-        `(int)cudaGetLastError()`,
-        `(long long)&cudaMemcpy2D`,
-        `(long long)&cudaMemcpy`,
-        `(int)cuInit(0)`,
-        `(long long)&cuMemcpyDtoH_v2`,
+    // vsdbg's EE supports `new T(args)` and method calls into modules that
+    // ship a PDB. OpenCV's debug DLL (opencv_world*d.dll built with vcpkg
+    // or upstream) does ship symbols, so `new cv::Mat(rows, cols, type)`
+    // and `gpu.download(*pMat)` are both reachable. Once the host Mat is
+    // populated we read its `.data` pointer and let the caller readMemory
+    // it, then `delete` the Mat. This is the same path the GDB adapter
+    // uses (see gdb/libs/opencv/matUtils.ts) and the only one that does
+    // not depend on cudart/ucrtbase symbols.
+    const newExprs = [
+        `(long long)new cv::Mat(${rows}, ${cols}, ${matType})`,
+        `reinterpret_cast<long long>(new cv::Mat(${rows}, ${cols}, ${matType}))`,
+        `new cv::Mat(${rows}, ${cols}, ${matType})`,
     ];
-    for (const expr of diagExprs) {
-        const r = await evaluateExpression(session, expr, dlFrame);
-        logger.info(`[getGpuMatInfo] diag "${expr}" -> "${r}"`);
-    }
 
-    // ── Strategy A: cudaMemcpy2D spellings ──────────────────────────────
-    const cudaExprs = [
-        `(int)cudaMemcpy2D((void*)${bufPtr}, ${hostPitch}, (void*)${devPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`,
-        `(int){,,demo.exe}cudaMemcpy2D((void*)${bufPtr}, ${hostPitch}, (void*)${devPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`,
-        `(int)cudaMemcpy((void*)${bufPtr}, (void*)${devPtr}, ${totalBytes}, ${kindD2H})`,
-        `(int)cuMemcpyDtoH_v2(${parseInt(bufPtr)}, ${dataDec}, ${totalBytes})`,
-    ];
-    for (const expr of cudaExprs) {
-        const r = await evaluateExpression(session, expr, dlFrame);
-        logger.info(`[getGpuMatInfo] copy expr="${expr}" -> "${r}"`);
-        if (r !== null && /^\s*0\b/.test(r) && !errRe.test(r)) {
-            logger.info(`[getGpuMatInfo] copy succeeded via "${expr}"`);
-            return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
+    let matPtr = "";
+    for (const expr of newExprs) {
+        try {
+            const resp = await session.customRequest("evaluate", {
+                expression: expr,
+                frameId: dlFrame,
+                context: "repl",
+            });
+            logger.info(`[getGpuMatInfo] new expr="${expr}" result="${resp?.result}" memRef="${resp?.memoryReference}"`);
+            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
+                matPtr = resp.memoryReference;
+                break;
+            }
+            const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
+            if (hexM && isValidMemoryReference(hexM[0])) {
+                matPtr = hexM[0];
+                break;
+            }
+            const dec = parseInt(resp?.result ?? "");
+            if (!isNaN(dec) && dec > 0) {
+                matPtr = "0x" + dec.toString(16);
+                break;
+            }
+        } catch (e) {
+            logger.warn(`[getGpuMatInfo] new threw for "${expr}": ${e}`);
         }
     }
 
-    // ── Strategy B: GpuMat::download with cv::Mat wrapper (fallback) ────
-    const dlExpr = `${varName}.download(cv::Mat(${rows}, ${cols}, ${matType}, (void*)${bufPtr}))`;
-    logger.info(`[getGpuMatInfo] strategy B download expr="${dlExpr}"`);
-    const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
-    logger.info(`[getGpuMatInfo] strategy B download result="${dlRes}"`);
-    if (dlRes !== null && !errRe.test(dlRes)) {
-        return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
+    if (matPtr) {
+        const dlExpr = `${varName}.download(*(cv::Mat*)${matPtr})`;
+        const dlRes = await evaluateExpression(session, dlExpr, dlFrame);
+        logger.info(`[getGpuMatInfo] download expr="${dlExpr}" result="${dlRes}"`);
+
+        const dataPtr = await tryGetDataPointer(session, [
+            `((cv::Mat*)${matPtr})->data`,
+            `(long long)((cv::Mat*)${matPtr})->data`,
+            `reinterpret_cast<long long>(((cv::Mat*)${matPtr})->data)`,
+        ], dlFrame);
+
+        if (dataPtr) {
+            return { rows, cols, channels, depth, dataPtr, allocatedMat: matPtr };
+        }
+
+        logger.warn(`[getGpuMatInfo] failed to resolve data pointer after download for "${varName}"`);
+        try {
+            await session.customRequest("evaluate", {
+                expression: `(void)delete (cv::Mat*)${matPtr}`,
+                frameId: dlFrame,
+                context: "repl",
+            });
+        } catch { /* best-effort */ }
+    } else {
+        logger.warn(`[getGpuMatInfo] strategy A could not heap-allocate cv::Mat for "${varName}" (likely missing OpenCV PDB)`);
     }
 
-    // ── Strategy C: try readMemory directly on device pointer ───────────
-    // This only works if a CUDA-aware debugger (e.g. Nsight) is active, but
-    // costs almost nothing to attempt.
-    try {
-        const raw = await readMemoryChunked(session, devPtr, totalBytes);
-        if (raw) {
-            logger.info(`[getGpuMatInfo] readMemory on device pointer succeeded!`);
-            return { rows, cols, channels, depth, dataPtr: devPtr };
+    // ── Strategy B: readMemory on device pointer ───────────────────────────
+    // Only succeeds when a CUDA-aware debugger (e.g. NVIDIA Nsight VSCE) is
+    // attached. Cheap to attempt and harmless when it fails.
+    const dataRes = await evaluateExpression(session, `(long long)${varName}.data`, frameId);
+    const dataDec = parseInt(dataRes ?? "0");
+    if (!isNaN(dataDec) && dataDec > 0) {
+        const devPtr = "0x" + dataDec.toString(16);
+        try {
+            const raw = await readMemoryChunked(session, devPtr, totalBytes);
+            if (raw) {
+                logger.info(`[getGpuMatInfo] readMemory on device pointer succeeded for "${varName}"`);
+                return { rows, cols, channels, depth, dataPtr: devPtr };
+            }
+        } catch (e) {
+            logger.info(`[getGpuMatInfo] readMemory on device pointer failed: ${e}`);
         }
-    } catch (e) {
-        logger.info(`[getGpuMatInfo] readMemory on device pointer failed: ${e}`);
     }
 
     logger.warn(`[getGpuMatInfo] all download strategies failed for "${varName}"`);
