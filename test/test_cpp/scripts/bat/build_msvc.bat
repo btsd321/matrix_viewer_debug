@@ -6,7 +6,7 @@ rem If Visual Studio is installed in a non-default location, set VS_INSTALL_DIR
 rem before calling this script:
 rem   set "VS_INSTALL_DIR=D:\SoftWare\Microsoft Visual Studio\18\Community"
 rem Leave empty ("") to let CMake auto-detect via vswhere.
-if not defined VS_INSTALL_DIR set "VS_INSTALL_DIR=D:\SoftWare\Microsoft Visual Studio\18\Community"
+if not defined VS_INSTALL_DIR set "VS_INSTALL_DIR=D:\SoftWare\Microsoft Visual Studio\2022\Community"
 
 rem vcpkg toolchain — auto-detected if CMAKE_TOOLCHAIN_FILE env var is set,
 rem otherwise falls back to the path below. Set VCPKG_ROOT to override.

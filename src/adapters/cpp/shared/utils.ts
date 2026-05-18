@@ -5,7 +5,9 @@
  * Mirrors the role of src/adapters/python/libs/utils.ts for the C++ side.
  */
 
-// ── Smart pointer helpers ─────────────────────────────────────────────────
+import { Buffer } from "node:buffer";
+
+// ── Smart pointer helpers─────────────────────────────────────────────────
 
 /**
  * Describes how to dereference a pointer wrapper in a C++ debug expression.
@@ -15,11 +17,24 @@
  */
 export type SmartPtrDerefKind = "deref" | "lock_deref";
 
+/**
+ * Identifies which C++ debugger we're talking to. Influences which internal
+ * smart-pointer field we can directly access (libstdc++ uses `_M_ptr`, MSVC
+ * STL uses `_Ptr`, libc++/LLDB has neither stably exposed via `evaluate`).
+ */
+export type DebuggerKind = "gdb" | "lldb" | "msvc";
+
 export interface SmartPtrUnwrapResult {
     /** The inner (pointed-to) type, e.g. "cv::Mat" from "shared_ptr<cv::Mat>". */
     innerType: string;
     /** The dereference strategy to use when building debug expressions. */
     kind: SmartPtrDerefKind;
+    /**
+     * The wrapper category that produced this result. Used by helpers that
+     * need to differentiate template-based wrappers from raw pointers (raw
+     * pointers do not have an internal "managed pointer" field).
+     */
+    wrapper: "shared" | "unique" | "weak" | "raw";
 }
 
 /**
@@ -43,23 +58,23 @@ export function unwrapSmartPointer(typeName: string): SmartPtrUnwrapResult | nul
     const trimmed = typeName.trim();
 
     // ── Template-based wrappers (shared_ptr, unique_ptr, weak_ptr, Qt) ───────
-    const TEMPLATE_WRAPPERS: { prefix: string; kind: SmartPtrDerefKind }[] = [
-        { prefix: "std::shared_ptr",         kind: "deref" },
-        { prefix: "std::__1::shared_ptr",    kind: "deref" },   // libc++ (LLDB/macOS)
-        { prefix: "std::unique_ptr",         kind: "deref" },
-        { prefix: "std::__1::unique_ptr",    kind: "deref" },
+    const TEMPLATE_WRAPPERS: { prefix: string; kind: SmartPtrDerefKind; wrapper: "shared" | "unique" | "weak" }[] = [
+        { prefix: "std::shared_ptr",         kind: "deref",      wrapper: "shared" },
+        { prefix: "std::__1::shared_ptr",    kind: "deref",      wrapper: "shared" },   // libc++ (LLDB/macOS)
+        { prefix: "std::unique_ptr",         kind: "deref",      wrapper: "unique" },
+        { prefix: "std::__1::unique_ptr",    kind: "deref",      wrapper: "unique" },
         // libc++ internal alias for unique_ptr: std::_MakeUniq<T>::__single_object
         // LLDB reports `auto p = make_unique<T>()` with this type string.
-        { prefix: "std::_MakeUniq",          kind: "deref" },
-        { prefix: "std::__1::_MakeUniq",     kind: "deref" },
-        { prefix: "std::weak_ptr",           kind: "lock_deref" },
-        { prefix: "std::__1::weak_ptr",      kind: "lock_deref" },
-        { prefix: "boost::shared_ptr",       kind: "deref" },
-        { prefix: "QSharedPointer",          kind: "deref" },
-        { prefix: "QScopedPointer",          kind: "deref" },
+        { prefix: "std::_MakeUniq",          kind: "deref",      wrapper: "unique" },
+        { prefix: "std::__1::_MakeUniq",     kind: "deref",      wrapper: "unique" },
+        { prefix: "std::weak_ptr",           kind: "lock_deref", wrapper: "weak" },
+        { prefix: "std::__1::weak_ptr",      kind: "lock_deref", wrapper: "weak" },
+        { prefix: "boost::shared_ptr",       kind: "deref",      wrapper: "shared" },
+        { prefix: "QSharedPointer",          kind: "deref",      wrapper: "shared" },
+        { prefix: "QScopedPointer",          kind: "deref",      wrapper: "unique" },
     ];
 
-    for (const { prefix, kind } of TEMPLATE_WRAPPERS) {
+    for (const { prefix, kind, wrapper } of TEMPLATE_WRAPPERS) {
         if (!trimmed.startsWith(prefix)) {
             continue;
         }
@@ -82,7 +97,7 @@ export function unwrapSmartPointer(typeName: string): SmartPtrUnwrapResult | nul
         }
         const inner = rest.slice(1, i).trim(); // strip outer < >
         if (inner.length > 0) {
-            return { innerType: inner, kind };
+            return { innerType: inner, kind, wrapper };
         }
     }
 
@@ -125,7 +140,123 @@ export function unwrapSmartPointer(typeName: string): SmartPtrUnwrapResult | nul
     if (!bare || /^(?:void|char|wchar_t|char8_t|char16_t|char32_t)$/.test(bare)) {
         return null;
     }
-    return { innerType: s, kind: "deref" };
+    return { innerType: s, kind: "deref", wrapper: "raw" };
+}
+
+/**
+ * Build the debug expression that dereferences a smart/raw pointer to its
+ * pointed-to object.  Centralises the (debugger × wrapper) lookup table that
+ * was previously duplicated across every coordinator.
+ *
+ * GDB rationale: libstdc++'s `shared_ptr<T>` / `unique_ptr<T>` cannot be
+ * dereferenced via `*x` in `evaluate` reliably — GDB does not always inline
+ * `operator*` and may return empty results while triggering side-effects on
+ * `this=0x0` (segfault).  We instead read the internal raw pointer field
+ * `_M_ptr` and dereference *that*, which is a pure memory load.
+ *
+ * MSVC STL stores the managed pointer in `_Ptr` (member of `_Ptr_base<T>`).
+ *
+ * LLDB synthetic formatters expose the pointed-to object directly via `*x`,
+ * so we keep that for shared/unique. Weak_ptr still needs `.lock()`.
+ */
+export function buildDerefExpression(
+    varName: string,
+    unwrap: SmartPtrUnwrapResult,
+    debuggerKind: DebuggerKind
+): string {
+    if (unwrap.wrapper === "raw") {
+        return `(*${varName})`;
+    }
+
+    if (debuggerKind === "gdb") {
+        // libstdc++ internal layout differs by wrapper:
+        //   shared_ptr / weak_ptr → __shared_ptr base has `_M_ptr`
+        //   unique_ptr            → no clean field path (the tuple member
+        //     `_M_head_impl` is ambiguous between the pointer and the
+        //     deleter base classes).  Exploit the EBO guarantee instead:
+        //     when Deleter is empty (default_delete is), sizeof(unique_ptr<T>)
+        //     equals sizeof(T*) and the pointer occupies the object's first
+        //     bytes — so `*(T**)&up` reads the raw pointer reliably.
+        if (unwrap.wrapper === "unique") {
+            const elemType = firstTemplateArg(unwrap.innerType);
+            return `(**(${elemType}**)&${varName})`;
+        }
+        return `(*${varName}._M_ptr)`;
+    }
+    if (debuggerKind === "msvc") {
+        if (unwrap.wrapper === "weak") {
+            return `(*${varName}._Ptr)`;
+        }
+        return `(*${varName})`;
+    }
+    // lldb (CodeLLDB)
+    if (unwrap.wrapper === "weak") {
+        return `(*${varName}.lock())`;
+    }
+    return `(*${varName})`;
+}
+
+/**
+ * Build a debug expression that evaluates to a *truthy* value when the smart
+ * or raw pointer is null/empty — i.e. when dereferencing it would crash the
+ * inferior.  Use as a guard before any expression that calls members on the
+ * pointed-to object (e.g. `${derefExpr}.rows`).
+ */
+export function buildNullGuardExpression(
+    varName: string,
+    unwrap: SmartPtrUnwrapResult,
+    debuggerKind: DebuggerKind
+): string {
+    if (unwrap.wrapper === "raw") {
+        return `${varName} == 0`;
+    }
+
+    if (debuggerKind === "gdb") {
+        if (unwrap.wrapper === "unique") {
+            const elemType = firstTemplateArg(unwrap.innerType);
+            return `*(${elemType}**)&${varName} == 0`;
+        }
+        return `${varName}._M_ptr == 0`;
+    }
+    if (debuggerKind === "msvc") {
+        return `${varName}._Ptr == 0`;
+    }
+    // lldb
+    if (unwrap.wrapper === "weak") {
+        return `${varName}.expired()`;
+    }
+    return `${varName}.get() == 0`;
+}
+
+/** Map a vscode `DebugSession.type` to our debugger taxonomy. */
+export function debuggerKindFromSessionType(sessionType: string): DebuggerKind {
+    if (sessionType === "lldb") { return "lldb"; }
+    if (sessionType === "cppvsdbg") { return "msvc"; }
+    return "gdb";
+}
+
+/**
+ * Return the first comma-separated argument of a comma-separated template
+ * parameter list, respecting nested `<...>` brackets.
+ *
+ * Example: `"cv::cuda::GpuMat, std::default_delete<cv::cuda::GpuMat>"`
+ *   → `"cv::cuda::GpuMat"`
+ *
+ * If the input has no top-level comma, returns it unchanged.  Used to peel
+ * the deleter off `unique_ptr<T, D>` template arguments before constructing
+ * a `T*` cast expression.
+ */
+function firstTemplateArg(args: string): string {
+    let depth = 0;
+    for (let i = 0; i < args.length; i++) {
+        const c = args[i];
+        if (c === "<") { depth++; }
+        else if (c === ">") { depth--; }
+        else if (c === "," && depth === 0) {
+            return args.slice(0, i).trim();
+        }
+    }
+    return args.trim();
 }
 
 // ── C++ type helpers ─────────────────────────────────────────────────────
@@ -238,14 +369,7 @@ export function computeMinMax(
 
 /** Encode a Uint8Array to a Base64 string (chunked to avoid stack overflow). */
 export function bufferToBase64(buffer: Uint8Array): string {
-    let binary = "";
-    const chunk = 8192;
-    for (let i = 0; i < buffer.length; i += chunk) {
-        binary += String.fromCharCode(
-            ...buffer.subarray(i, Math.min(i + chunk, buffer.length))
-        );
-    }
-    return btoa(binary);
+    return Buffer.from(buffer).toString("base64");
 }
 
 // ── Stats helpers ─────────────────────────────────────────────────────────

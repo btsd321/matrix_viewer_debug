@@ -21,6 +21,19 @@ set(EXTRA_LIBS)
 set(EXTRA_INCLUDES)
 
 if(WITH_OPENCV)
+    find_package(CUDAToolkit REQUIRED)
+    if(NOT TARGET CUDA::cufft_static_nocallback)
+        find_library(CUDA_cufft_static_nocallback_LIBRARY
+            NAMES cufft_static_nocallback
+            HINTS ${CUDAToolkit_LIBRARY_DIR}
+        )
+        if(CUDA_cufft_static_nocallback_LIBRARY)
+            add_library(CUDA::cufft_static_nocallback STATIC IMPORTED)
+            set_target_properties(CUDA::cufft_static_nocallback PROPERTIES
+            IMPORTED_LOCATION "${CUDA_cufft_static_nocallback_LIBRARY}"
+            )
+        endif()
+    endif()
     find_package(OpenCV QUIET)
     if(OpenCV_FOUND)
         message(STATUS "OpenCV ${OpenCV_VERSION} found — HAVE_OPENCV enabled")

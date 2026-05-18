@@ -23,12 +23,12 @@ import {
 } from "../../debugger";
 import { getBytesPerElement, cvDepthToDtype } from "./matUtils";
 import { bufferToBase64, computeMinMax } from "../utils";
-import { getMatInfoFromVariables, getMatInfoFromEvaluate } from "./matUtils";
+import { getMatInfoFromVariables, getMatInfoFromEvaluate, getGpuMatInfo } from "./matUtils";
 
 export class OpenCvImageProvider implements ILibImageProvider {
     canHandle(typeName: string): boolean {
-        // cv::Mat, cv::Mat_<T>, cv::UMat — but NOT cv::Matx (handled separately)
-        return /cv::(Mat[^x]|Mat$|UMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
+        // cv::Mat, cv::Mat_<T>, cv::UMat, cv::cuda::GpuMat
+        return /cv::(Mat[^x]|Mat$|UMat|cuda::GpuMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
     }
 
     async fetchImageData(
@@ -36,25 +36,71 @@ export class OpenCvImageProvider implements ILibImageProvider {
         varName: string,
         info: VariableInfo
     ): Promise<ImageData | null> {
-        // ── Step 1: Resolve cv::Mat metadata ─────────────────────────────────
+        // ── Step 1: Resolve metadata ───────────────────────────────────────────
         let matInfo = null;
+        const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
-        // For LLDB (and any debugger with variablesReference), walk children
-        if (info.variablesReference && info.variablesReference > 0) {
-            matInfo = await getMatInfoFromVariables(session, info.variablesReference);
-        }
+        if (isGpuMat) {
+            // GpuMat: GPU memory not accessible via DAP readMemory.
+            // We allocate a host buffer in the inferior with cv::fastMalloc,
+            // wrap it in a temporary cv::Mat, call GpuMat::download() to
+            // populate it, then readMemory the host buffer.
+            // Requires OpenCV's debug DLL to ship a PDB.
+            // See matUtils.getGpuMatInfo for the full strategy chain.
+            matInfo = await getGpuMatInfo(session, varName, info.frameId, info.nullGuardExpression);
+            if (!matInfo) {
+                vscode.window.showWarningMessage(
+                    `MatrixViewer: Cannot download cv::cuda::GpuMat data with vsdbg. Make sure OpenCV's debug DLL (with PDB) is loaded, or use GDB / CodeLLDB / NVIDIA Nsight for GPU visualization.`
+                );
+                return null;
+            }
+        } else {
+            // For LLDB (and any debugger with variablesReference), walk children
+            if (info.variablesReference && info.variablesReference > 0) {
+                matInfo = await getMatInfoFromVariables(session, info.variablesReference);
+            }
 
-        // Fallback: evaluate expression-based member access
-        if (!matInfo) {
-            matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            // Fallback: evaluate expression-based member access
+            if (!matInfo) {
+                matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            }
         }
 
         if (!matInfo) {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer, allocatedMat } = matInfo;
+
+        // Free inferior-side allocations from the GpuMat path.
+        // - allocatedBuffer: host buffer from cv::fastMalloc → cv::fastFree
+        // - allocatedMat: heap cv::Mat (legacy / future) → delete
+        // vsdbg's EE rejects `new`/`delete` and `free()` (the CRT export has
+        // no PDB), so we must use cv::fastFree which is exported by the
+        // OpenCV debug DLL.
+        const freeAllocated = async () => {
+            if (allocatedBuffer) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)cv::fastFree((void*)${allocatedBuffer})`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+            if (allocatedMat) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)delete (cv::Mat*)${allocatedMat}`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+        };
+
         if (rows <= 0 || cols <= 0) {
+            await freeAllocated();
             return null;
         }
 
@@ -63,6 +109,7 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const totalBytes = rows * cols * channels * bytesPerElement;
 
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+        await freeAllocated();
         if (!buffer) {
             return null;
         }

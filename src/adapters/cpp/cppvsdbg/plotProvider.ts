@@ -9,7 +9,7 @@ import { ILibPlotProvider } from "../../ILibProviders";
 import { EigenPlotProvider } from "./libs/eigen/plotProvider";
 import { StdPlotProvider } from "./libs/std/plotProvider";
 import { QtPlotProvider } from "./libs/qt/plotProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibPlotProvider[] = [
     new EigenPlotProvider(),
@@ -28,13 +28,15 @@ export async function fetchMsvcPlotData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        // MSVC STL: weak_ptr<T> inherits _Ptr_base<T> which stores the managed
-        // raw pointer in member _Ptr.  Using _Ptr avoids calling lock() whose
-        // return value is a temporary shared_ptr — cppvsdbg cannot chain method
-        // calls (e.g. .size(), .data()) on temporaries returned by functions.
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}._Ptr)` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "msvc");
         typeName = unwrapped.innerType;
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType, variablesReference: 0 };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            variablesReference: 0,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "msvc"),
+        };
     }
 
     for (const provider of PROVIDERS) {

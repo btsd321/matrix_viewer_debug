@@ -17,6 +17,7 @@ import {
     tryGetDataPointer,
     buildDataPointerExpressions,
 } from "../../debugger";
+import { logger } from "../../../../../log/logger";
 
 // ── OpenCV depth constants ────────────────────────────────────────────────
 
@@ -86,6 +87,17 @@ export interface MatInfo {
     depth: number;
     /** Hex address string suitable for `readMemory` requests. */
     dataPtr: string;
+    /**
+     * Hex address of a buffer the provider allocated in the inferior via
+     * `malloc` (e.g. for GpuMat host downloads). Caller must `free()` it after
+     * reading the bytes to prevent inferior-side leaks.
+     */
+    allocatedBuffer?: string;
+    /**
+     * Row pitch in bytes (step). When set and larger than cols*channels*elemSize,
+     * the buffer contains padding that must be stripped after reading.
+     */
+    step?: number;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -279,4 +291,180 @@ export async function getMatInfoFromEvaluate(
     }
 
     return { rows, cols, channels, depth, dataPtr };
+}
+
+// ── GpuMat helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Extract cv::cuda::GpuMat metadata and download data to host memory.
+ *
+ * GPU memory is not accessible via DAP readMemory, so this function evaluates
+ * a C++ expression that creates a host cv::Mat, calls GpuMat::download(), and
+ * returns the host data pointer. The host Mat is heap-allocated and persists
+ * for the remainder of the debug session.
+ *
+ * GpuMat uses the same type encoding as cv::Mat::type():
+ *   depth    = type & 7
+ *   channels = ((type >> 3) & 63) + 1
+ */
+export async function getGpuMatInfo(
+    session: vscode.DebugSession,
+    varName: string,
+    frameId?: number
+): Promise<MatInfo | null> {
+    // For `(*xxx.lock())` (weak_ptr lock_deref), the simple evaluator can't
+    // invoke `.lock()`. CodeLLDB's weak_ptr synthetic formatter exposes a
+    // `pointer` child of type `T*` — `wp.pointer->field` works directly.
+    // Internal raw-pointer fields (`_M_ptr`/`__ptr_`/`_Ptr`) are NOT visible
+    // through the simple evaluator (the formatter hides them).
+    const lockDeref = varName.match(/^\(\*(.+)\.lock\(\)\)$/);
+    const fieldExpr = (field: string): string => {
+        if (lockDeref) {
+            return `${lockDeref[1]}.pointer->${field}`;
+        }
+        return `${varName}.${field}`;
+    };
+
+    const tryFieldInt = async (field: string): Promise<{ raw: string | null; value: number }> => {
+        const raw = await evaluateExpression(session, fieldExpr(field), frameId);
+        if (raw == null) {
+            return { raw: null, value: NaN };
+        }
+        const v = parseInt(raw.match(/=\s*(-?\d+)/)?.[1] ?? raw);
+        return { raw, value: v };
+    };
+
+    const [rowsR, colsR, flagsR] = await Promise.all([
+        tryFieldInt("rows"),
+        tryFieldInt("cols"),
+        tryFieldInt("flags"),
+    ]);
+
+    const rows = rowsR.value;
+    const cols = colsR.value;
+
+    if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
+        logger.warn(`[getGpuMatInfo] invalid dims for "${varName}": rows="${rowsR.raw}" cols="${colsR.raw}" flags="${flagsR.raw}"`);
+        return null;
+    }
+
+    const flags = flagsR.value;
+    const matType = flags & 0xfff;
+    const depth = matType & 7;
+    const channels = ((matType >> 3) & 63) + 1;
+
+    // CodeLLDB DAP context "watch" + "/nat " prefix invokes the native
+    // (Clang-based) evaluator which supports malloc()/cudaMemcpy2D() etc.
+    // Source: codelldb/src/expressions/mod.rs get_expression_type().
+    const dlFrame = frameId ?? undefined;
+    const elemSize = getBytesPerElement(depth);
+
+    const evalNative = async (expr: string): Promise<{ result?: string; memoryReference?: string } | null> => {
+        try {
+            return await session.customRequest("evaluate", {
+                expression: `/nat ${expr}`,
+                frameId: dlFrame,
+                context: "watch",
+            }) ?? null;
+        } catch {
+            return null;
+        }
+    };
+
+    const parsePtr = (result?: string | null, memRef?: string): string => {
+        if (memRef && isValidMemoryReference(memRef)) {
+            return memRef;
+        }
+        if (!result) {
+            return "";
+        }
+        const hexMatch = result.match(/0x[0-9a-fA-F]+/);
+        if (hexMatch && isValidMemoryReference(hexMatch[0])) {
+            return hexMatch[0];
+        }
+        const decMatch = result.match(/=\s*(-?\d+)/) ?? result.match(/^\s*(-?\d+)/);
+        const dec = decMatch ? parseInt(decMatch[1]) : NaN;
+        if (!isNaN(dec) && dec > 0) {
+            return "0x" + dec.toString(16);
+        }
+        return "";
+    };
+
+    // Pointer reads must NOT use /nat through shared_ptr — the native evaluator
+    // can't invoke shared_ptr::operator*() and returns wrapper-internal bytes.
+    // The simple evaluator's synthetic formatter resolves `(*sp_gpu).data`
+    // correctly but pretty-prints `unsigned char *` as a string (the `result`
+    // field becomes "" when the GPU memory isn't readable as text). The DAP
+    // `memoryReference` field on the same response carries the raw address.
+    const evalSimple = async (expr: string) => {
+        try {
+            return await session.customRequest("evaluate", {
+                expression: expr,
+                frameId: dlFrame,
+                context: "watch",
+            }) ?? null;
+        } catch {
+            return null;
+        }
+    };
+
+    const tryFieldResp = async (field: string) => evalSimple(fieldExpr(field));
+
+    const [srcResp, stepResp] = await Promise.all([
+        tryFieldResp("data"),
+        tryFieldResp("step"),
+    ]);
+    const srcPtr = parsePtr(srcResp?.result, srcResp?.memoryReference);
+    const stepDec = parseInt(stepResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? stepResp?.result ?? "0");
+
+    if (!srcPtr || !isValidMemoryReference(srcPtr) || stepDec <= 0) {
+        logger.warn(
+            `[getGpuMatInfo] could not resolve GPU pointer/step for "${varName}": ` +
+            `srcPtr="${srcPtr}" step=${stepDec}`
+        );
+        return null;
+    }
+
+    const widthBytes = cols * channels * elemSize;
+    const kindD2H = 2; // cudaMemcpyDeviceToHost
+    const pitchedBytes = stepDec * rows;
+
+    const mallocResp = await evalNative(`(long long)malloc(${pitchedBytes})`);
+    const bufPtr = parsePtr(mallocResp?.result, mallocResp?.memoryReference);
+    if (!bufPtr || !isValidMemoryReference(bufPtr)) {
+        logger.warn(`[getGpuMatInfo] malloc(${pitchedBytes}) failed for "${varName}"`);
+        return null;
+    }
+
+    // Prefer flat cudaMemcpy — cudaMemcpy2D returns cudaErrorInvalidValue
+    // in CodeLLDB's /nat evaluator on Windows.
+    // Copy the full pitched region (step * rows); caller strips row padding
+    // using the returned `step` field.
+    const flatResp = await evalNative(
+        `(int)cudaMemcpy((void*)${bufPtr}, (void*)${srcPtr}, (long long)${pitchedBytes}, ${kindD2H})`
+    );
+    const flatRet = parseInt(flatResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? flatResp?.result ?? "-1");
+    if (flatRet === 0) {
+        return {
+            rows, cols, channels, depth,
+            dataPtr: bufPtr,
+            allocatedBuffer: bufPtr,
+            step: stepDec > widthBytes ? stepDec : undefined,
+        };
+    }
+
+    logger.warn(`[getGpuMatInfo] cudaMemcpy failed for "${varName}" (ret=${flatRet})`);
+
+    // Fallback: cudaMemcpy2D in case a future CodeLLDB version fixes it
+    const cpyResp = await evalNative(
+        `(int)cudaMemcpy2D((void*)${bufPtr}, ${widthBytes}, (void*)${srcPtr}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`
+    );
+    const retVal = parseInt(cpyResp?.result?.match(/=\s*(-?\d+)/)?.[1] ?? cpyResp?.result ?? "-1");
+    if (retVal === 0) {
+        return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
+    }
+
+    logger.warn(`[getGpuMatInfo] all CUDA copy strategies failed for "${varName}"`);
+    await evalNative(`free((void*)${bufPtr})`);
+    return null;
 }

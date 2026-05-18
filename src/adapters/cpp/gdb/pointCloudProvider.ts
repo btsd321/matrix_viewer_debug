@@ -9,12 +9,14 @@ import { ILibPointCloudProvider } from "../../ILibProviders";
 import { PclPointCloudProvider } from "./libs/pcl/pointCloudProvider";
 import { StdPointCloudProvider } from "./libs/std/pointCloudProvider";
 import { QtPointCloudProvider } from "./libs/qt/pointCloudProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { Ros2PointCloudProvider } from "./libs/ros2/pointCloudProvider";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibPointCloudProvider[] = [
     new PclPointCloudProvider(),
     new StdPointCloudProvider(),
     new QtPointCloudProvider(),
+    new Ros2PointCloudProvider(),
 ];
 
 export async function fetchGdbPointCloudData(
@@ -28,11 +30,15 @@ export async function fetchGdbPointCloudData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        // GDB cannot reliably chain method calls on temporaries (e.g. lock().size()).
-        // For weak_ptr, access the internal raw pointer field _M_ptr (libstdc++) directly.
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}._M_ptr)` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "gdb");
         typeName = unwrapped.innerType;
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType, variablesReference: 0 };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            variablesReference: 0,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "gdb"),
+        };
     }
 
     for (const provider of PROVIDERS) {

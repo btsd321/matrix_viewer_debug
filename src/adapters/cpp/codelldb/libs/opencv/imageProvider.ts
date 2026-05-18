@@ -23,12 +23,12 @@ import {
 } from "../../debugger";
 import { getBytesPerElement, cvDepthToDtype } from "./matUtils";
 import { bufferToBase64, computeMinMax } from "../utils";
-import { getMatInfoFromVariables, getMatInfoFromEvaluate } from "./matUtils";
+import { getMatInfoFromVariables, getMatInfoFromEvaluate, getGpuMatInfo } from "./matUtils";
 
 export class OpenCvImageProvider implements ILibImageProvider {
     canHandle(typeName: string): boolean {
-        // cv::Mat, cv::Mat_<T>, cv::UMat — but NOT cv::Matx (handled separately)
-        return /cv::(Mat[^x]|Mat$|UMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
+        // cv::Mat, cv::Mat_<T>, cv::UMat, cv::cuda::GpuMat
+        return /cv::(Mat[^x]|Mat$|UMat|cuda::GpuMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
     }
 
     async fetchImageData(
@@ -36,35 +36,74 @@ export class OpenCvImageProvider implements ILibImageProvider {
         varName: string,
         info: VariableInfo
     ): Promise<ImageData | null> {
-        // ── Step 1: Resolve cv::Mat metadata ─────────────────────────────────
+        // ── Step 1: Resolve metadata ───────────────────────────────────────────
         let matInfo = null;
+        const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
-        // For LLDB (and any debugger with variablesReference), walk children
-        if (info.variablesReference && info.variablesReference > 0) {
-            matInfo = await getMatInfoFromVariables(session, info.variablesReference);
-        }
+        if (isGpuMat) {
+            // GpuMat: GPU memory not accessible via DAP readMemory; download to host
+            matInfo = await getGpuMatInfo(session, varName, info.frameId);
+        } else {
+            // For LLDB (and any debugger with variablesReference), walk children
+            if (info.variablesReference && info.variablesReference > 0) {
+                matInfo = await getMatInfoFromVariables(session, info.variablesReference);
+            }
 
-        // Fallback: evaluate expression-based member access
-        if (!matInfo) {
-            matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            // Fallback: evaluate expression-based member access
+            if (!matInfo) {
+                matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            }
         }
 
         if (!matInfo) {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer } = matInfo;
+
+        // Always free the inferior-side host buffer (if any) before returning.
+        // The GpuMat path malloc's a temporary host buffer to receive the
+        // device→host copy; once we've read its bytes, leaving it behind would
+        // leak in the inferior across every visualization.
+        const freeAllocated = async () => {
+            if (!allocatedBuffer) { return; }
+            try {
+                await session.customRequest("evaluate", {
+                    expression: `/nat free((void*)${allocatedBuffer})`,
+                    frameId: info.frameId,
+                    context: "watch",
+                });
+            } catch { /* best-effort: inferior may have detached */ }
+        };
+
         if (rows <= 0 || cols <= 0) {
+            await freeAllocated();
             return null;
         }
 
         // ── Step 2: Read pixel bytes via readMemory ───────────────────────────
         const bytesPerElement = getBytesPerElement(depth);
-        const totalBytes = rows * cols * channels * bytesPerElement;
+        const widthBytes = cols * channels * bytesPerElement;
+        const totalBytes = rows * widthBytes;
+        const step = matInfo.step;
 
-        const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
-        if (!buffer) {
+        // When step is set, the buffer has row padding that must be stripped.
+        const readBytes = step ? step * rows : totalBytes;
+        const rawBuffer = await readMemoryChunked(session, dataPtr, readBytes);
+        await freeAllocated();
+        if (!rawBuffer) {
             return null;
+        }
+
+        let buffer: Uint8Array;
+        if (step && step > widthBytes) {
+            // Strip per-row padding: extract only the first widthBytes from each row
+            buffer = new Uint8Array(totalBytes);
+            for (let r = 0; r < rows; r++) {
+                buffer.set(rawBuffer.subarray(r * step, r * step + widthBytes), r * widthBytes);
+            }
+        } else {
+            buffer = rawBuffer;
         }
 
         const dtype = cvDepthToDtype(depth);

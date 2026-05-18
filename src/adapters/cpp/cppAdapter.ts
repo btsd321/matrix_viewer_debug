@@ -41,7 +41,7 @@ import { fetchMsvcImageData } from "./cppvsdbg/imageProvider";
 import { fetchMsvcPlotData } from "./cppvsdbg/plotProvider";
 import { fetchMsvcPointCloudData } from "./cppvsdbg/pointCloudProvider";
 import { enrichMsvcVariableInfo } from "./cppvsdbg/variableInfoEnrichers";
-import { unwrapSmartPointer } from "./shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression, debuggerKindFromSessionType } from "./shared/utils";
 
 export class CppAdapter implements IDebugAdapter {
     isSupportedSession(session: vscode.DebugSession): boolean {
@@ -86,18 +86,28 @@ export class CppAdapter implements IDebugAdapter {
             // If the Eigen object is wrapped in a smart pointer, evaluate dimensions
             // via the dereference expression so member access works correctly.
             const ptrUnwrapped = unwrapSmartPointer(info.typeName ?? info.type);
+            const dbgKind = debuggerKindFromSessionType(session.type);
             const eigenVarName = ptrUnwrapped !== null
-                ? (ptrUnwrapped.kind === "lock_deref" ? `(*${varName}.lock())` : `(*${varName})`)
+                ? buildDerefExpression(varName, ptrUnwrapped, dbgKind)
                 : varName;
+
+            // Build a guard expression that checks whether the pointer is null
+            // BEFORE dereferencing, so the debugger evaluates it atomically.
+            // Catches both genuinely-null pointers and uninitialised stack
+            // variables whose raw pointer field happens to be zero.
+            const guardExpr = ptrUnwrapped !== null
+                ? buildNullGuardExpression(varName, ptrUnwrapped, dbgKind)
+                : undefined;
+
             // Skip _evalEigenDim for dimensions known at compile time (e.g. VectorXd
             // has ColsAtCompileTime=1; m_storage.m_cols does not exist at runtime).
             const ctDims = this._parseEigenCompileTimeDims(info.typeName ?? info.type);
             const rows = (ctDims && ctDims[0] > 0)
                 ? ctDims[0]
-                : await this._evalEigenDim(session, eigenVarName, "rows", info.frameId);
+                : await this._evalEigenDim(session, eigenVarName, "rows", info.frameId, guardExpr);
             const cols = (ctDims && ctDims[1] > 0)
                 ? ctDims[1]
-                : await this._evalEigenDim(session, eigenVarName, "cols", info.frameId);
+                : await this._evalEigenDim(session, eigenVarName, "cols", info.frameId, guardExpr);
             if (rows > 0 && cols > 0) {
                 info.shape = [rows, cols];
             }
@@ -111,16 +121,14 @@ export class CppAdapter implements IDebugAdapter {
         session: vscode.DebugSession,
         varName: string,
         prop: "rows" | "cols",
-        frameId?: number
+        frameId?: number,
+        guardExpr?: string
     ): Promise<number> {
         // m_rows / m_cols are Eigen's internal DenseStorage members — accessible
         // even when LLDB cannot call C++ member functions.
         const internalProp = prop === "rows" ? "m_rows" : "m_cols";
-        const exprs = session.type === "lldb"
+        const baseExprs = session.type === "lldb"
             ? [
-                // On Windows/PDB, LLDB cannot JIT-compile function calls (.rows()),
-                // but can access struct fields via memory read (m_storage.m_rows).
-                // Try field access first; fall back to function call for Linux/macOS.
                 `${varName}.m_storage.${internalProp}`,
                 `${varName}.${prop}()`,
                 `(long long)${varName}.${prop}()`,
@@ -130,6 +138,12 @@ export class CppAdapter implements IDebugAdapter {
                 `${varName}.${prop}()`,
                 `(long long)${varName}.${prop}()`,
             ];
+        // When a guard is provided, wrap each expression so GDB evaluates the
+        // null-check and the dimension access atomically — avoids SIGSEGV on
+        // uninitialised smart pointers.
+        const exprs = guardExpr
+            ? baseExprs.map(e => `${guardExpr} ? 0 : (${e})`)
+            : baseExprs;
         for (const expr of exprs) {
             const res = await this._evaluateExpression(session, expr, frameId);
             const n = parseInt(res ?? "");

@@ -17,6 +17,7 @@ import {
     tryGetDataPointer,
     buildDataPointerExpressions,
 } from "../../debugger";
+import { logger } from "../../../../../log/logger";
 
 // ── OpenCV depth constants ────────────────────────────────────────────────
 
@@ -86,6 +87,12 @@ export interface MatInfo {
     depth: number;
     /** Hex address string suitable for `readMemory` requests. */
     dataPtr: string;
+    /** Hex address of an inferior-side host buffer the provider malloc'd
+     *  (GpuMat strategy A). Caller must `free()` it after readMemory. */
+    allocatedBuffer?: string;
+    /** Hex address of a heap-allocated `cv::Mat*` (GpuMat strategy B).
+     *  Caller must `delete` it after readMemory. */
+    allocatedMat?: string;
 }
 
 // ── Variables-tree approach ───────────────────────────────────────────────
@@ -242,4 +249,195 @@ export async function getMatInfoFromEvaluate(
     }
 
     return { rows, cols, channels, depth, dataPtr };
+}
+
+// ── GpuMat helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Extract cv::cuda::GpuMat metadata and download data to host memory.
+ *
+ * GPU memory is not accessible via DAP readMemory, so this function evaluates
+ * a C++ expression that creates a host cv::Mat, calls GpuMat::download(), and
+ * returns the host data pointer. The host Mat is heap-allocated and persists
+ * for the remainder of the debug session.
+ *
+ * GpuMat uses the same type encoding as cv::Mat::type():
+ *   depth    = type & 7
+ *   channels = ((type >> 3) & 63) + 1
+ */
+export async function getGpuMatInfo(
+    session: vscode.DebugSession,
+    varName: string,
+    frameId?: number,
+    nullGuardExpression?: string
+): Promise<MatInfo | null> {
+    logger.info(`[getGpuMatInfo] >>> varName="${varName}" frameId=${frameId} guard="${nullGuardExpression ?? ""}"`);
+
+    // ── Step 0: short-circuit when the wrapping pointer is null ────────────
+    // Without this check, calling .rows/.cols/.type() on `*(T*)nullptr` would
+    // dispatch into cv::cuda::GpuMat::type() with this=0x0 and SIGSEGV the
+    // inferior — game over for the debug session.
+    if (nullGuardExpression) {
+        const guardRes = await evaluateExpression(session, nullGuardExpression, frameId);
+        logger.info(`[getGpuMatInfo] guard "${nullGuardExpression}" -> "${guardRes}"`);
+        // GDB returns "true" / "1" for non-zero, "false" / "0" for null.
+        if (guardRes !== null && /^\s*(true|1)\b/i.test(guardRes)) {
+            logger.warn(`[getGpuMatInfo] underlying pointer is null/empty; bailing out`);
+            return null;
+        }
+    }
+
+    const [rowsRes, colsRes, typeRes] = await Promise.all([
+        evaluateExpression(session, `${varName}.rows`, frameId),
+        evaluateExpression(session, `${varName}.cols`, frameId),
+        evaluateExpression(session, `${varName}.type()`, frameId),
+    ]);
+    logger.info(`[getGpuMatInfo] raw evals rows="${rowsRes}" cols="${colsRes}" type()="${typeRes}"`);
+
+    // Empty string means GDB silently failed (often a pretty-printer choking on
+    // `*sp_gpu`).  Treat as fatal — *not* as 0 — to avoid further side-effecting
+    // evaluates that could destabilise the inferior.
+    if (!rowsRes || !colsRes || !typeRes) {
+        logger.warn(`[getGpuMatInfo] one or more dimension evals returned empty; bailing out`);
+        return null;
+    }
+
+    const rows = parseInt(rowsRes);
+    const cols = parseInt(colsRes);
+
+    if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
+        logger.warn(`[getGpuMatInfo] invalid dims: rows=${rows} cols=${cols}`);
+        return null;
+    }
+
+    const matType = parseInt(typeRes);
+    const depth = matType & 7;
+    const channels = ((matType >> 3) & 63) + 1;
+    logger.info(`[getGpuMatInfo] decoded rows=${rows} cols=${cols} matType=${matType} depth=${depth} channels=${channels}`);
+
+    // Download GPU → host without user-code changes.
+    //
+    // GDB's expression parser rejects `cv::Mat(a,b,c,d)` constructor syntax
+    // (it misreads it as a C-cast + comma expression).  We therefore call
+    // CUDA runtime's `cudaMemcpy2D` directly — all scalar args, no ctors.
+    const dlFrame = frameId ?? undefined;
+    const elemSize = getBytesPerElement(depth);
+    const totalBytes = rows * cols * channels * elemSize;
+
+    // ── Strategy A: malloc + cudaMemcpy2D ──────────────────────────────────
+    const mallocExpr = `(long long)malloc(${totalBytes})`;
+    let bufPtr = "";
+    try {
+        const mr = await session.customRequest("evaluate", {
+            expression: mallocExpr,
+            frameId: dlFrame,
+            context: "repl",
+        });
+        logger.info(`[getGpuMatInfo] strategyA malloc result="${mr?.result}" memRef="${mr?.memoryReference}"`);
+        const dec = parseInt(mr?.result ?? "");
+        if (!isNaN(dec) && dec > 0) {
+            bufPtr = "0x" + dec.toString(16);
+        }
+    } catch (e) {
+        logger.warn(`[getGpuMatInfo] strategyA malloc threw: ${e}`);
+    }
+    logger.info(`[getGpuMatInfo] strategyA bufPtr="${bufPtr}" totalBytes=${totalBytes}`);
+
+    if (bufPtr && isValidMemoryReference(bufPtr)) {
+        const errRe = /(-var-create|Cannot evaluate|Cannot resolve|No symbol|error:|syntax error|no such)/i;
+        const widthBytes = cols * channels * elemSize;
+        const hostPitch = widthBytes;
+        const kindD2H = 2; // cudaMemcpyDeviceToHost
+
+        // GpuMat.data is the device pointer; GpuMat.step is the row pitch.
+        const [srcRes, stepRes] = await Promise.all([
+            evaluateExpression(session, `(long long)${varName}.data`, dlFrame),
+            evaluateExpression(session, `(long long)${varName}.step`, dlFrame),
+        ]);
+        logger.info(`[getGpuMatInfo] strategyA src="${srcRes}" step="${stepRes}"`);
+        const srcDec = parseInt(srcRes ?? "");
+        const stepDec = parseInt(stepRes ?? "");
+        if (!isNaN(srcDec) && srcDec > 0 && !isNaN(stepDec) && stepDec > 0) {
+            const srcHex = "0x" + srcDec.toString(16);
+            const cpyExpr = `(int)cudaMemcpy2D((void*)${bufPtr}, ${hostPitch}, (void*)${srcHex}, ${stepDec}, ${widthBytes}, ${rows}, ${kindD2H})`;
+            const cpyRes = await evaluateExpression(session, cpyExpr, dlFrame);
+            logger.info(`[getGpuMatInfo] strategyA cudaMemcpy2D expr="${cpyExpr}" result="${cpyRes}"`);
+            // Success: cudaSuccess == 0
+            if (cpyRes !== null && !errRe.test(cpyRes) && /^\s*0\b/.test(cpyRes)) {
+                return { rows, cols, channels, depth, dataPtr: bufPtr, allocatedBuffer: bufPtr };
+            }
+            logger.warn(`[getGpuMatInfo] strategyA cudaMemcpy2D did not return 0; falling back to strategyB`);
+        } else {
+            logger.warn(`[getGpuMatInfo] strategyA could not read ${varName}.data / ${varName}.step`);
+        }
+
+        // Strategy A failed but malloc succeeded — release the buffer before
+        // falling through to strategy B to avoid a leak.
+        try {
+            await session.customRequest("evaluate", {
+                expression: `(void)free((void*)${bufPtr})`,
+                frameId: dlFrame,
+                context: "repl",
+            });
+        } catch { /* best-effort */ }
+    }
+
+    // ── Strategy B: heap-allocate cv::Mat with new (LLDB / vsdbg) ─────────
+    const newExprs = [
+        `new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
+        `(long long)new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type())`,
+        `reinterpret_cast<long long>(new cv::Mat(${varName}.rows, ${varName}.cols, ${varName}.type()))`,
+    ];
+
+    let matPtr = "";
+    for (const expr of newExprs) {
+        try {
+            const resp = await session.customRequest("evaluate", {
+                expression: expr,
+                frameId: dlFrame,
+                context: "repl",
+            });
+            if (resp?.memoryReference && isValidMemoryReference(resp.memoryReference)) {
+                matPtr = resp.memoryReference;
+                break;
+            }
+            const hexM = resp?.result?.match(/0x[0-9a-fA-F]+/);
+            if (hexM && isValidMemoryReference(hexM[0])) {
+                matPtr = hexM[0];
+                break;
+            }
+            const dec = parseInt(resp?.result ?? "");
+            if (!isNaN(dec) && dec > 0) {
+                matPtr = "0x" + dec.toString(16);
+                break;
+            }
+        } catch { /* try next expression */ }
+    }
+
+    if (!matPtr) {
+        logger.warn(`[getGpuMatInfo] failed to allocate host Mat for "${varName}"`);
+        return null;
+    }
+
+    await evaluateExpression(session, `${varName}.download(*(cv::Mat*)${matPtr})`, dlFrame);
+
+    const dataPtr = await tryGetDataPointer(session, [
+        `((cv::Mat*)${matPtr})->data`,
+        `(long long)((cv::Mat*)${matPtr})->data`,
+    ], dlFrame);
+
+    if (!dataPtr) {
+        logger.warn(`[getGpuMatInfo] failed to resolve data pointer for "${varName}"`);
+        // Release the cv::Mat we new'd to avoid leaking it in the inferior.
+        try {
+            await session.customRequest("evaluate", {
+                expression: `(void)delete (cv::Mat*)${matPtr}`,
+                frameId: dlFrame,
+                context: "repl",
+            });
+        } catch { /* best-effort */ }
+        return null;
+    }
+
+    return { rows, cols, channels, depth, dataPtr, allocatedMat: matPtr };
 }

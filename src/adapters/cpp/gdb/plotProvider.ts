@@ -9,7 +9,7 @@ import { ILibPlotProvider } from "../../ILibProviders";
 import { EigenPlotProvider } from "./libs/eigen/plotProvider";
 import { StdPlotProvider } from "./libs/std/plotProvider";
 import { QtPlotProvider } from "./libs/qt/plotProvider";
-import { unwrapSmartPointer } from "../shared/utils";
+import { unwrapSmartPointer, buildDerefExpression, buildNullGuardExpression } from "../shared/utils";
 
 const PROVIDERS: ILibPlotProvider[] = [
     new EigenPlotProvider(),
@@ -28,11 +28,15 @@ export async function fetchGdbPlotData(
 
     const unwrapped = unwrapSmartPointer(typeName);
     if (unwrapped !== null) {
-        // GDB cannot reliably chain method calls on temporaries (e.g. lock().size()).
-        // For weak_ptr, access the internal raw pointer field _M_ptr (libstdc++) directly.
-        resolvedName = unwrapped.kind === "lock_deref" ? `(*${varName}._M_ptr)` : `(*${varName})`;
+        resolvedName = buildDerefExpression(varName, unwrapped, "gdb");
         typeName = unwrapped.innerType;
-        resolvedInfo = { ...info, typeName: unwrapped.innerType, type: unwrapped.innerType, variablesReference: 0 };
+        resolvedInfo = {
+            ...info,
+            typeName: unwrapped.innerType,
+            type: unwrapped.innerType,
+            variablesReference: 0,
+            nullGuardExpression: buildNullGuardExpression(varName, unwrapped, "gdb"),
+        };
     }
 
     for (const provider of PROVIDERS) {

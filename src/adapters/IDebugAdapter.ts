@@ -50,6 +50,15 @@ export interface VariableInfo {
      * walks both fail.
      */
     indexedVariables?: number;
+    /**
+     * Optional debug-expression that evaluates to a truthy value when this
+     * variable is a null/empty pointer (or its underlying smart-pointer is
+     * empty).  Set by per-debugger coordinators when they unwrap a smart or
+     * raw pointer; consumed by lib providers (e.g. GpuMat) that want to
+     * sanity-check the pointer before evaluating member-access expressions
+     * which would otherwise crash the inferior.
+     */
+    nullGuardExpression?: string;
 }
 
 // ── Adapter interface ─────────────────────────────────────────────────────

@@ -23,12 +23,13 @@ import {
 } from "../../debugger";
 import { getBytesPerElement, cvDepthToDtype } from "./matUtils";
 import { bufferToBase64, computeMinMax } from "../utils";
-import { getMatInfoFromVariables, getMatInfoFromEvaluate } from "./matUtils";
+import { getMatInfoFromVariables, getMatInfoFromEvaluate, getGpuMatInfo } from "./matUtils";
+import { logger } from "../../../../../log/logger";
 
 export class OpenCvImageProvider implements ILibImageProvider {
     canHandle(typeName: string): boolean {
-        // cv::Mat, cv::Mat_<T>, cv::UMat — but NOT cv::Matx (handled separately)
-        return /cv::(Mat[^x]|Mat$|UMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
+        // cv::Mat, cv::Mat_<T>, cv::UMat, cv::cuda::GpuMat
+        return /cv::(Mat[^x]|Mat$|UMat|cuda::GpuMat)/i.test(typeName) || /cv::Mat_/.test(typeName);
     }
 
     async fetchImageData(
@@ -36,25 +37,60 @@ export class OpenCvImageProvider implements ILibImageProvider {
         varName: string,
         info: VariableInfo
     ): Promise<ImageData | null> {
-        // ── Step 1: Resolve cv::Mat metadata ─────────────────────────────────
+        // ── Step 1: Resolve metadata ───────────────────────────────────────────
         let matInfo = null;
+        const isGpuMat = /\bcv::cuda::GpuMat\b/i.test(info.type);
 
-        // For LLDB (and any debugger with variablesReference), walk children
-        if (info.variablesReference && info.variablesReference > 0) {
-            matInfo = await getMatInfoFromVariables(session, info.variablesReference);
-        }
+        if (isGpuMat) {
+            // GpuMat: GPU memory not accessible via DAP readMemory; download to host.
+            // Pass nullGuardExpression so getGpuMatInfo can short-circuit when the
+            // wrapping smart/raw pointer is null (otherwise calling .rows/.cols/.type()
+            // on a *T at this=0x0 segfaults the inferior).
+            matInfo = await getGpuMatInfo(session, varName, info.frameId, info.nullGuardExpression);
+        } else {
+            // For LLDB (and any debugger with variablesReference), walk children
+            if (info.variablesReference && info.variablesReference > 0) {
+                matInfo = await getMatInfoFromVariables(session, info.variablesReference);
+            }
 
-        // Fallback: evaluate expression-based member access
-        if (!matInfo) {
-            matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            // Fallback: evaluate expression-based member access
+            if (!matInfo) {
+                matInfo = await getMatInfoFromEvaluate(session, varName, info.frameId);
+            }
         }
 
         if (!matInfo) {
             return null;
         }
 
-        const { rows, cols, channels, depth, dataPtr } = matInfo;
+        const { rows, cols, channels, depth, dataPtr, allocatedBuffer, allocatedMat } = matInfo;
+
+        // Free any inferior-side allocation made during GpuMat metadata retrieval.
+        // Strategy A malloc'd a raw buffer; strategy B new'd a cv::Mat. Both must
+        // be released after readMemory or they leak across every visualization.
+        const freeAllocated = async () => {
+            if (allocatedBuffer) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)free((void*)${allocatedBuffer})`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+            if (allocatedMat) {
+                try {
+                    await session.customRequest("evaluate", {
+                        expression: `(void)delete (cv::Mat*)${allocatedMat}`,
+                        frameId: info.frameId,
+                        context: "repl",
+                    });
+                } catch { /* best-effort */ }
+            }
+        };
+
         if (rows <= 0 || cols <= 0) {
+            await freeAllocated();
             return null;
         }
 
@@ -63,8 +99,17 @@ export class OpenCvImageProvider implements ILibImageProvider {
         const totalBytes = rows * cols * channels * bytesPerElement;
 
         const buffer = await readMemoryChunked(session, dataPtr, totalBytes);
+        await freeAllocated();
         if (!buffer) {
+            logger.warn(`[OpenCvImageProvider] readMemory returned null for varName="${varName}" dataPtr=${dataPtr} totalBytes=${totalBytes}`);
             return null;
+        }
+
+        if (isGpuMat) {
+            const preview = Array.from(buffer.slice(0, Math.min(16, buffer.length)));
+            let nonZero = 0;
+            for (let i = 0; i < buffer.length; i++) { if (buffer[i] !== 0) { nonZero++; } }
+            logger.info(`[OpenCvImageProvider] GpuMat "${varName}" buffer bytes=${buffer.length} nonZero=${nonZero} firstBytes=[${preview.join(",")}]`);
         }
 
         const dtype = cvDepthToDtype(depth);
