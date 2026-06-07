@@ -25,7 +25,7 @@ export { VisualizableKind } from "../IDebugAdapter";
  */
 const IMAGE_TYPE_PATTERNS = [
     // numpy.ndarray is no longer an image type — it maps to plot/pointcloud/unknown
-    /PIL\.(Image|JpegImagePlugin|PngImagePlugin)|\bImageFile\b/i, // full OR short PIL class names
+    /PIL\.(Image|JpegImagePlugin|PngImagePlugin)|\bImage\b|\w+ImageFile\b/i, // full OR short PIL class names (debugpy returns type.__name__)
     /torch\.Tensor|\bTensor\b/i,                          // "torch.Tensor" or "Tensor"
     /cv2\.(Mat|UMat|cuda\.GpuMat)|\b(UMat|GpuMat)\b/i,  // cv2 types (UMat/GpuMat distinguish from cv::Mat)
 ];
