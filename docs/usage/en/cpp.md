@@ -317,6 +317,7 @@ Pair two open viewer panels so their viewport stays in sync:
 | Type | Notes |
 |------|-------|
 | `cv::Mat` | All depths (CV_8U, CV_16U, CV_32F, …); 1, 3, 4 channels |
+| `cv::cuda::GpuMat` | GPU memory matrix — auto-downloaded to host for reading (see [GpuMat notes](#gpumat-gpu-memory)) |
 | `std::array<std::array<T,W>,H>` | 2D array — treated as grayscale image |
 | `T[H][W]` | C-style 2D array — treated as grayscale image |
 | `T[H][W][C]` | C-style 3D array — treated as multi-channel image |

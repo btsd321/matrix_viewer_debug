@@ -315,6 +315,7 @@ cmake --build build_msvc --config Debug
 | 类型 | 说明 |
 |------|------|
 | `cv::Mat` | 所有位深（CV_8U、CV_16U、CV_32F 等）；支持 1、3、4 通道 |
+| `cv::cuda::GpuMat` | GPU 显存矩阵——自动下载到主机内存后读取（详见 [GpuMat 说明](#gpumat-gpu-显存)）|
 | `std::array<std::array<T,W>,H>` | 二维数组——视为灰度图像 |
 | `T[H][W]` | C 风格二维数组——视为灰度图像 |
 | `T[H][W][C]` | C 风格三维数组——视为多通道图像 |
