@@ -12,7 +12,7 @@
 |---------|--------|--------------|
 | **1D 曲线图** | `std::vector<T>`, `std::array<T,N>`, `T[N]`, `std::set<T>`, `Eigen::VectorX*`, `Eigen::Matrix<T,N,1>`, `QVector<T>`, `QList<T>` | `list`, `tuple`, `np.ndarray` (1D), `array.array` |
 | **2D 散点图** | `Eigen::Matrix<T,N,2>` (N×2，列0=X，列1=Y), `QPolygonF`, `QVector<QVector2D>` | `np.ndarray` (N,2), `list` of 2-tuples |
-| **2D 图像** | `cv::Mat`, `T[H][W]`, `std::array<std::array<T>>`, `Eigen::Matrix<T,R,C>` (rows>1, cols>2), `QImage` | `PIL.Image`, `torch.Tensor` (2D/3D/4D), `cv2.UMat`/`GpuMat` |
+| **2D 图像** | `cv::Mat`, `cv::cuda::GpuMat`, `T[H][W]`, `std::array<std::array<T>>`, `Eigen::Matrix<T,R,C>` (rows>1, cols>2), `QImage` | `PIL.Image`, `torch.Tensor` (2D/3D/4D), `cv2.UMat`/`GpuMat` |
 | **3D 点云** | `std::vector<cv::Point3f>`, `QVector<QVector3D>` | `np.ndarray` (N,3/6), `list` of 3-tuples, `open3d.geometry.PointCloud` |
 | **变量面板** | TreeView 自动检测当前作用域变量 | TreeView 自动检测当前作用域变量 |
 | **视图同步** | 配对变量联动缩放/平移 | 配对变量联动缩放/平移 |
@@ -31,6 +31,7 @@
 | `torch.Tensor` shape `(C, H, W)` 或 `(H, W, C)` | 多通道图（需 detach/cpu） | 已实现 |
 | `cv2.UMat` | OpenCV UMat（CPU 透明 API） | 已实现 |
 | `cv2.cuda.GpuMat` | OpenCV GPU 矩阵 | 已实现 |
+| `cv::cuda::GpuMat` | OpenCV GPU 矩阵（GPU 显存，自动下载到主机后读取；GDB/CodeLLDB 完全支持，cppvsdbg 有限支持）| 已实现 |
 | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>` (rows>1, cols>2) | 单通道灰度图（自动开启归一化） | 已实现 |
 | `QImage` (Qt5 / Qt6) | Qt 图像，支持 Format_Grayscale8 / RGB32 / ARGB32 / RGB888 等格式，兼容 Qt5 (`byteCount()`) 和 Qt6 (`sizeInBytes()`) | 计划中 |
 | `sensor_msgs::msg::Image` (ROS 2) | ROS 2 图像消息，支持 mono8 / mono16 / rgb8 / bgr8 / rgba8 / bgra8 / 8UCx / 32FCx 等编码（自动按 step 去 padding）| 已实现（仅 GDB / cppdbg） |

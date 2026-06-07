@@ -350,6 +350,28 @@ cmake --build build_msvc --config Debug
 | `std::vector<cv::Point3f>` / `std::vector<cv::Point3d>` | 每个元素 = 一个三维点 |
 | `std::array<cv::Point3f,N>` / `std::array<cv::Point3d,N>` | 每个元素 = 一个三维点 |
 
+### GpuMat（GPU 显存）
+
+`cv::cuda::GpuMat` 将像素数据存储在 GPU 设备内存中，无法通过 DAP `readMemory` 直接访问。扩展会自动将数据下载到主机端缓冲区后再读取。
+
+**工作原理：**
+
+1. **元数据**：通过 DAP `evaluate` 读取 `.rows`、`.cols` 和 `.flags`（或 `.type()`）获取维度、位深和通道数。
+2. **下载**：扩展将 GPU 数据拷贝到主机内存：
+   - **GDB / CodeLLDB**：使用 `cudaMemcpy2D`（CUDA 运行时 API）配合 `malloc` 分配的主机缓冲区——最可靠的路径。
+   - **回退方案（GDB）**：若 `cudaMemcpy2D` 失败，回退到 `new cv::Mat` + `GpuMat::download()`。
+3. **读取**：通过 DAP `readMemory` 从主机缓冲区读取像素字节，随后释放缓冲区。
+
+**调试器支持：**
+
+| 调试器 | 状态 | 说明 |
+|--------|------|------|
+| GDB（Linux）| ✅ 完全支持 | `cudaMemcpy2D` + `download()` 回退 |
+| CodeLLDB（macOS/Linux）| ✅ 完全支持 | `/nat` 原生求值器执行 `malloc` + `cudaMemcpy2D` |
+| cppvsdbg（Windows）| ⚠️ 有限支持 | MSVC 表达式求值器无法调用 CUDA 运行时函数；若 GPU 下载不可用会显示警告。请使用 GDB（Linux）或 CodeLLDB 进行 GpuMat 可视化。 |
+
+> **提示**：`shared_ptr<GpuMat>`、`unique_ptr<GpuMat>`、`weak_ptr<GpuMat>` 和原始 `GpuMat*` 均可自动检测并解包。
+
 ---
 
 ## 快速上手示例

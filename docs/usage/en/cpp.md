@@ -352,6 +352,28 @@ Pair two open viewer panels so their viewport stays in sync:
 | `std::vector<cv::Point3f>` / `std::vector<cv::Point3d>` | Each element = one 3D point |
 | `std::array<cv::Point3f,N>` / `std::array<cv::Point3d,N>` | Each element = one 3D point |
 
+### GpuMat (GPU Memory)
+
+`cv::cuda::GpuMat` stores pixel data in GPU device memory, which is not directly accessible via DAP `readMemory`. The extension automatically downloads the data to a host-side buffer before reading it.
+
+**How it works:**
+
+1. **Metadata**: `.rows`, `.cols`, and `.flags` (or `.type()`) are read via DAP `evaluate` to determine dimensions, depth, and channel count.
+2. **Download**: The extension copies GPU data to host memory:
+   - **GDB / CodeLLDB**: Uses `cudaMemcpy2D` (CUDA runtime API) with a `malloc`'d host buffer — the most reliable path.
+   - **Fallback (GDB)**: If `cudaMemcpy2D` fails, falls back to `new cv::Mat` + `GpuMat::download()`.
+3. **Read**: Pixel bytes are read from the host buffer via DAP `readMemory`, then the buffer is freed.
+
+**Debugger support:**
+
+| Debugger | Status | Notes |
+|----------|--------|-------|
+| GDB (Linux) | ✅ Full support | `cudaMemcpy2D` + `download()` fallback |
+| CodeLLDB (macOS/Linux) | ✅ Full support | `/nat` native evaluator for `malloc` + `cudaMemcpy2D` |
+| cppvsdbg (Windows) | ⚠️ Limited | MSVC expression evaluator cannot call CUDA runtime functions; a warning is shown if GPU download is unavailable. Use GDB (Linux) or CodeLLDB for GpuMat visualization. |
+
+> **Tip**: `shared_ptr<GpuMat>`, `unique_ptr<GpuMat>`, `weak_ptr<GpuMat>`, and raw `GpuMat*` are all automatically detected and unwrapped.
+
 ---
 
 ## Quick-Start Example
