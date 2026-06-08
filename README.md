@@ -52,6 +52,7 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 | Category | Type | Visualization |
 | -------------------- | --------------------------------------- | --------------- |
 | **Image (2D)** | `cv::Mat` (OpenCV) | 🖼️ Image Viewer |
+| | `cv::cuda::GpuMat` (OpenCV CUDA, GPU memory) | 🖼️ Image Viewer |
 | | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>` (rows>1, cols>2) | 🖼️ Image Viewer |
 | | `QImage` (Qt5 / Qt6) | 🖼️ Image Viewer |
 | | `sensor_msgs::msg::Image` (ROS 2, **GDB only**) | 🖼️ Image Viewer |
@@ -75,6 +76,8 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 > - `cols == 1` or `rows == 1` → **1D line plot**
 > - `cols == 2` → **2D scatter** (column-major storage: X = col 0, Y = col 1)
 > - `rows > 1` and `cols > 2` → **image** (grayscale, auto-normalised)
+>
+> **cv::cuda::GpuMat** (C++): GPU device memory is not directly accessible via DAP `readMemory`. The extension downloads data to a host-side buffer before reading — using `cudaMemcpy2D` (GDB/CodeLLDB) or `GpuMat::download()` (fallback). GDB and CodeLLDB are fully supported. **cppvsdbg (MSVC on Windows)** has limited support: the MSVC expression evaluator cannot call functions in modules without debug info (CRT, CUDA runtime). A warning is shown if GPU download is unavailable; use GDB (Linux) or CodeLLDB (macOS/Linux) for GpuMat visualization.
 
 ---
 

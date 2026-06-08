@@ -52,6 +52,7 @@
 | 类别 | 类型 | 可视化方式 |
 | -------------------- | --------------------------------------- | --------------- |
 | **图像（2D）** | `cv::Mat`（OpenCV）| 🖼️ 图像查看器 |
+| | `cv::cuda::GpuMat`（OpenCV CUDA，GPU 显存）| 🖼️ 图像查看器 |
 | | `Eigen::Matrix<T,R,C>` / `Eigen::Array<T,R,C>`（rows>1, cols>2）| 🖼️ 图像查看器 |
 | | `QImage`（Qt5 / Qt6）| 🖼️ 图像查看器 |
 | | `sensor_msgs::msg::Image`（ROS 2，**仅 GDB**）| 🖼️ 图像查看器 |
@@ -75,6 +76,8 @@
 > - `cols == 1` 或 `rows == 1` → **1D 折线图**
 > - `cols == 2` → **2D 散点图**（列优先存储：X = 第 0 列，Y = 第 1 列）
 > - `rows > 1` 且 `cols > 2` → **图像**（单通道灰度，自动开启归一化）
+>
+> **cv::cuda::GpuMat**（C++）：GPU 设备内存无法通过 DAP `readMemory` 直接访问。扩展会将数据先下载到主机端缓冲区再读取——使用 `cudaMemcpy2D`（GDB/CodeLLDB）或 `GpuMat::download()`（回退方案）。GDB 和 CodeLLDB 完全支持。**cppvsdbg（MSVC，Windows）**支持有限：MSVC 表达式求值器无法调用缺少调试信息的模块中的函数（CRT、CUDA 运行时）。若 GPU 下载不可用会显示警告；请使用 GDB（Linux）或 CodeLLDB（macOS/Linux）进行 GpuMat 可视化。
 
 ---
 
