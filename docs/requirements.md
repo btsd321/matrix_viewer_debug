@@ -89,7 +89,7 @@
   - 增强检测：通过 `evaluate` 命令获取 `type(var).__name__`、`var.shape`、`var.dtype` 等信息精确分类
 - 变量按类型分组展示（图像组、曲线组、点云组）
 - 支持**手动添加变量**到面板（右键菜单 → "Add to MatrixViewer"）
-- 支持**变量分组**（Add to Group）
+- 支持**变量分组**（Add to Display Group）—— 仅影响侧边栏布局，与视图同步组无关
 
 ### 3.1.1 编辑器右键可视化（Editor Context Menu）
 

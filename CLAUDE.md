@@ -86,7 +86,7 @@ Two behaviours are load-bearing and easy to break:
 1. **Echo suppression** — applying a remote viewport fires the same change handlers a user gesture would, so `sync-controls.js` drops reports while `applyingRemote` is set.
 2. **Swallow-first-report** — a panel that joins a group with an established viewport has not applied it yet; its first spontaneous report carries its own default viewport, so the store discards it instead of yanking the whole group back to fit.
 
-Note that a sync group is unrelated to `matrixViewer.addToGroup`, which is display-only grouping in the TreeView.
+Note that a sync group is unrelated to `matrixViewer.addToDisplayGroup`, which is display-only grouping in the TreeView. The two are kept apart in the UI by `contextValue`: `MvVariableItem` composes `mvVariable` + `Synced`? + `Grouped`?, so `when` clauses must use regex (`=~ /^mvVariableSynced/`, `=~ /Grouped$/`) rather than equality.
 
 ## Logging
 

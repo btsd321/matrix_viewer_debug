@@ -29,12 +29,18 @@ export class MvVariableItem extends vscode.TreeItem {
         public readonly kind: MvVariableKind,
         public readonly typeLabel: string = "",
         public readonly shapeLabel: string = "",
-        public readonly sync?: MvSyncBadge
+        public readonly sync?: MvSyncBadge,
+        public readonly displayGroup?: string
     ) {
         super(variableName, vscode.TreeItemCollapsibleState.None);
-        // The context value drives which menu items appear: only synced
-        // variables offer "Unsync".
-        this.contextValue = sync ? "mvVariableSynced" : "mvVariable";
+        // The context value drives which menu items appear. Two independent
+        // axes are encoded here, so the suffixes must stay composable:
+        //   - "Synced"  → offers "Unsync"          (viewport sync group)
+        //   - "Grouped" → offers "Remove from …"   (display-only tree group)
+        // A variable can be in both at once, hence the concatenation rather
+        // than a flat enum.
+        this.contextValue =
+            "mvVariable" + (sync ? "Synced" : "") + (displayGroup ? "Grouped" : "");
 
         const base = shapeLabel ? `${typeLabel}  ${shapeLabel}` : typeLabel;
         this.description = sync ? `${base}  ⇄${sync.groupIndex + 1}` : base;
@@ -59,7 +65,20 @@ export class MvVariableItem extends vscode.TreeItem {
             this.kind,
             this.typeLabel,
             this.shapeLabel,
-            sync
+            sync,
+            this.displayGroup
+        );
+    }
+
+    /** Copy of this item carrying different display-group membership. */
+    withDisplayGroup(displayGroup: string | undefined): MvVariableItem {
+        return new MvVariableItem(
+            this.variableName,
+            this.kind,
+            this.typeLabel,
+            this.shapeLabel,
+            this.sync,
+            displayGroup
         );
     }
 
@@ -77,13 +96,24 @@ export class MvVariableItem extends vscode.TreeItem {
     }
 }
 
+/**
+ * A user-defined *display* group: a folder in the tree, nothing more.
+ *
+ * This is deliberately unrelated to a sync group (`src/sync/`). Grouping here
+ * never affects any viewport; it only changes how variables are laid out in
+ * the sidebar. The distinct `contextValue` keeps the two out of each other's
+ * menus.
+ */
 export class MvGroupItem extends vscode.TreeItem {
     public readonly children: MvVariableItem[] = [];
 
     constructor(public readonly groupName: string) {
         super(groupName, vscode.TreeItemCollapsibleState.Expanded);
-        this.contextValue = "mvGroup";
+        this.contextValue = "mvDisplayGroup";
         this.iconPath = new vscode.ThemeIcon("folder");
+        this.tooltip =
+            `Display group "${groupName}" — affects sidebar layout only, ` +
+            "not viewport synchronisation.";
     }
 }
 
@@ -138,7 +168,7 @@ export class MvVariablesProvider
             for (const name of varNames) {
                 const item = this.pinnedVars.get(name);
                 if (item) {
-                    group.children.push(this.decorate(item));
+                    group.children.push(this.decorate(item, groupName));
                 }
             }
             if (group.children.length > 0) {
@@ -149,7 +179,7 @@ export class MvVariablesProvider
         // Ungrouped variables
         for (const [name, item] of this.pinnedVars) {
             if (!groupedVarNames.has(name)) {
-                nodes.push(this.decorate(item));
+                nodes.push(this.decorate(item, undefined));
             }
         }
 
@@ -162,16 +192,24 @@ export class MvVariablesProvider
      * Sync state lives in the coordinator, not in the item, so it is read at
      * render time — the tree only has to be refreshed, never rebuilt.
      */
-    private decorate(item: MvVariableItem): MvVariableItem {
+    private decorate(
+        item: MvVariableItem,
+        displayGroup: string | undefined
+    ): MvVariableItem {
+        let out = item;
+        if (out.displayGroup !== displayGroup) {
+            out = out.withDisplayGroup(displayGroup);
+        }
+
         if (!this.syncState) {
-            return item;
+            return out;
         }
-        const groupIndex = this.syncState.getGroupIndex(item.variableName);
+        const groupIndex = this.syncState.getGroupIndex(out.variableName);
         if (groupIndex === undefined) {
-            return item.sync ? item.withSync(undefined) : item;
+            return out.sync ? out.withSync(undefined) : out;
         }
-        const partners = this.syncState.getPartners(item.variableName);
-        return item.withSync({ groupIndex, partners });
+        const partners = this.syncState.getPartners(out.variableName);
+        return out.withSync({ groupIndex, partners });
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -202,29 +240,60 @@ export class MvVariablesProvider
 
     removeVariable(name: string): void {
         if (this.pinnedVars.delete(name)) {
-            // Remove from all groups
-            for (const [groupName, varNames] of this.groups) {
-                const idx = varNames.indexOf(name);
-                if (idx !== -1) {
-                    varNames.splice(idx, 1);
-                    if (varNames.length === 0) {
-                        this.groups.delete(groupName);
-                    }
-                }
-            }
+            this.detachFromGroups(name);
             this._onDidChangeTreeData.fire();
         }
     }
 
+    /** Existing display-group names, for offering them in a QuickPick. */
+    getGroupNames(): string[] {
+        return [...this.groups.keys()];
+    }
+
+    /**
+     * Move a variable into a display group.
+     *
+     * A variable belongs to at most one group: the tree renders each variable
+     * once, so leaving it in two groups would silently duplicate the node.
+     * Any previous membership is therefore dropped first.
+     */
     addToGroup(varName: string, groupName: string): void {
+        this.detachFromGroups(varName);
+
         if (!this.groups.has(groupName)) {
             this.groups.set(groupName, []);
         }
-        const members = this.groups.get(groupName)!;
-        if (!members.includes(varName)) {
-            members.push(varName);
-        }
+        this.groups.get(groupName)!.push(varName);
         this._onDidChangeTreeData.fire();
+    }
+
+    /** Remove a variable from whichever display group holds it. */
+    removeFromGroup(varName: string): boolean {
+        const removed = this.detachFromGroups(varName);
+        if (removed) {
+            this._onDidChangeTreeData.fire();
+        }
+        return removed;
+    }
+
+    /**
+     * Drop `varName` from every group, pruning groups left empty.
+     * Does not fire the tree event — callers batch that.
+     */
+    private detachFromGroups(varName: string): boolean {
+        let removed = false;
+        for (const [groupName, varNames] of [...this.groups]) {
+            const idx = varNames.indexOf(varName);
+            if (idx === -1) {
+                continue;
+            }
+            varNames.splice(idx, 1);
+            removed = true;
+            if (varNames.length === 0) {
+                this.groups.delete(groupName);
+            }
+        }
+        return removed;
     }
 
     clear(): void {
