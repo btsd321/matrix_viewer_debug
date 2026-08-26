@@ -30,6 +30,7 @@ export function buildImageWebviewHtml(
     const cfg = vscode.workspace.getConfiguration("matrixViewer");
     const defaultColormap = cfg.get<string>("defaultColormap", "gray");
     const maxDisplaySize = cfg.get<number>("maxDisplaySize", 50);
+    const showSyncControls = cfg.get<boolean>("sync.showToolbarControls", true);
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -60,6 +61,7 @@ export function buildImageWebviewHtml(
     <label>BGR→RGB <input type="checkbox" id="chk-bgr2rgb" ${(data.format === "BGR" || data.format === "BGRA") ? "checked" : ""}></label>
     <button id="btn-reset">Reset</button>
     <button id="btn-save-png">Save PNG</button>
+    <span id="sync-controls"></span>
   </div>
 
   <div id="canvas-container">
@@ -68,6 +70,7 @@ export function buildImageWebviewHtml(
   </div>
 
   <script nonce="${nonce}" src="${mediaUri("colormaps.js")}"></script>
+  <script nonce="${nonce}" src="${mediaUri("sync-controls.js")}"></script>
   <script nonce="${nonce}">
     // ── Bootstrap data injected from extension ──────────────────────────
     const INIT_DATA = ${JSON.stringify(data)};
@@ -77,7 +80,8 @@ export function buildImageWebviewHtml(
     window.__matrixViewer = {
       initData: INIT_DATA,
       defaultColormap: ${JSON.stringify(defaultColormap)},
-      maxDisplaySize: ${maxDisplaySize}
+      maxDisplaySize: ${maxDisplaySize},
+      showSyncControls: ${showSyncControls}
     };
   </script>
   <script nonce="${nonce}" src="${mediaUri("image-viewer.js")}"></script>

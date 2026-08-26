@@ -3,7 +3,8 @@
  *
  * Line / Scatter modes: Canvas2D (no third-party dependency, reliable in VS Code WebView).
  * Histogram mode: uPlot bar chart.
- * Supports zoom/pan (wheel + drag), save PNG / CSV.
+ * Supports zoom/pan (wheel + drag), save PNG / CSV, and viewport sync
+ * (delegated to media/sync-controls.js).
  */
 
 (function () {
@@ -29,9 +30,48 @@
   const btnSavePng    = document.getElementById("btn-save-png");
   const btnSaveCsv    = document.getElementById("btn-save-csv");
   const container     = document.getElementById("plot-container");
+  const syncMount     = document.getElementById("sync-controls");
 
   // Layout padding constants (pixels)
   const PAD = { L: 64, R: 20, T: 20, B: 40 };
+
+  /**
+   * Redraw the current line/scatter canvas with the current viewRange.
+   * Set by buildCanvas2D, cleared by buildHistogram — histogram mode has no
+   * pan/zoom range and therefore cannot participate in sync.
+   * @type {(() => void)|null}
+   */
+  let currentRedraw = null;
+
+  // ── View sync ─────────────────────────────────────────────────────────────
+
+  /**
+   * Viewport synchronisation controller (media/sync-controls.js).
+   * The synced state is the visible data range on both axes, so panels with
+   * different sample counts still line up.
+   */
+  const sync = window.MatrixViewerSync.create({
+    vscode,
+    kind: "plot",
+    mount: window.__matrixViewer.showSyncControls === false ? null : syncMount,
+    getState: () => {
+      if (!currentRedraw || !viewRange) {
+        return null; // Histogram mode, or nothing drawn yet.
+      }
+      return {
+        kind: "plot",
+        xMin: viewRange.xMin, xMax: viewRange.xMax,
+        yMin: viewRange.yMin, yMax: viewRange.yMax,
+      };
+    },
+    applyState: (s) => {
+      if (!currentRedraw) {
+        return; // Histogram mode ignores incoming ranges.
+      }
+      viewRange = { xMin: s.xMin, xMax: s.xMax, yMin: s.yMin, yMax: s.yMax };
+      currentRedraw();
+    },
+  });
 
   // ── Init ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +91,7 @@
       viewRange = null;
       updateConfigBtnVisibility();
       buildPlot(data);
+      sync.report();
     });
     btnReset.addEventListener("click", () => {
       viewRange = null;
@@ -58,6 +99,8 @@
         histConfig = { type: "bins", bins: 50, step: null };
       }
       buildPlot(data);
+      // Reset is a deliberate gesture, so the group follows it.
+      sync.report();
     });
     btnHistConfig.addEventListener("click", openHistConfigModal);
     btnSavePng.addEventListener("click", savePng);
@@ -92,6 +135,7 @@
       "mode:", mode, "range:", d.stats.min, "-", d.stats.max);
 
     if (mode === "histogram") {
+      currentRedraw = null;
       buildHistogram(yVals, w, h);
     } else {
       buildCanvas2D(xVals, yVals, d, w, h);
@@ -120,6 +164,9 @@
         yMax: d.stats.max + yPad,
       };
     }
+
+    // Hoisted so applyState() can redraw this canvas without rebuilding it.
+    currentRedraw = () => drawCanvas2D(canvas, xVals, yVals, d);
 
     drawCanvas2D(canvas, xVals, yVals, d);
     attachCanvasInteraction(canvas, xVals, yVals, d);
@@ -246,6 +293,7 @@
         yMax: yPivot + (yMax - yPivot) * scale,
       };
       drawCanvas2D(canvas, xVals, yVals, d);
+      sync.report();
     }, { passive: false });
 
     // Drag pan
@@ -266,6 +314,7 @@
         yMin: rangeSave.yMin + dy, yMax: rangeSave.yMax + dy,
       };
       drawCanvas2D(canvas, xVals, yVals, d);
+      sync.report();
     });
     window.addEventListener("mouseup", () => { dragging = false; });
 
@@ -512,11 +561,16 @@
 
   // ── Message bus ───────────────────────────────────────────────────────────
 
+  // Sync messages ("sync/*") are handled inside sync-controls.js.
   window.addEventListener("message", (e) => {
     const msg = e.data;
     if (msg.type === "update" && msg.data) {
-      data      = msg.data;
-      viewRange = null;
+      data = msg.data;
+      // While synced, keep the group's range instead of auto-fitting to the
+      // new data — otherwise every step would yank all panels back to fit.
+      if (!sync.isSynced()) {
+        viewRange = null;
+      }
       updateStats(data);
       buildPlot(data);
     }

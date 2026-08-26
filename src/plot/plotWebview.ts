@@ -26,6 +26,9 @@ export function buildPlotWebviewHtml(
         );
 
     const nonce = generateNonce();
+    const showSyncControls = vscode.workspace
+        .getConfiguration("matrixViewer")
+        .get<boolean>("sync.showToolbarControls", true);
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -54,13 +57,18 @@ export function buildPlotWebviewHtml(
     <button id="btn-hist-config" style="display:none">Config</button>
     <button id="btn-save-png">Save PNG</button>
     <button id="btn-save-csv">Save CSV</button>
+    <span id="sync-controls"></span>
   </div>
   <div id="plot-container"></div>
 
   <script nonce="${nonce}">
-    window.__matrixViewer = { initData: ${JSON.stringify(data)} };
+    window.__matrixViewer = {
+      initData: ${JSON.stringify(data)},
+      showSyncControls: ${showSyncControls}
+    };
   </script>
   <script nonce="${nonce}" src="${mediaUri("uplot.iife.min.js")}"></script>
+  <script nonce="${nonce}" src="${mediaUri("sync-controls.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("plot-viewer.js")}"></script>
 </body>
 </html>`;

@@ -88,7 +88,7 @@ A Visual Studio Code extension for visualizing 1D/2D/3D data structures during d
 | **📈 1D Plot** | Line/Scatter/Histogram, custom X-axis, zoom, pan, export PNG/CSV |
 | **🖼️ 2D Image** | Multi-channel, auto-normalize, colormap, zoom up to 100×, pixel values on hover |
 | **📊 3D Point Cloud** | Three.js powered, color by X/Y/Z, adjustable point size, export PLY |
-| **🔗 View Sync** | Pair variables for synchronized zoom/pan/rotation across viewers |
+| **🔗 View Sync** | Group panels of the same viewer type for synchronized zoom/pan/rotation, from the panel toolbar or the sidebar |
 | **🔍 Auto Detection** | Variables panel auto-detects all visualizable types in current scope |
 | **🔄 Auto Refresh** | Webview auto-updates when stepping through code |
 | **🖱️ Editor Context Menu** | Right-click a variable name in the code editor to visualize it directly (shown only when the variable is visualizable in the current debug scope) |
