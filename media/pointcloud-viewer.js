@@ -24,6 +24,31 @@
   const btnReset = document.getElementById("btn-reset");
   const btnSavePly = document.getElementById("btn-save-ply");
   const infoLabel = document.getElementById("info-label");
+  const syncMount = document.getElementById("sync-controls");
+
+  // ── View sync ─────────────────────────────────────────────────────────────
+
+  /**
+   * Viewport synchronisation controller (media/sync-controls.js).
+   * Reports the orbit camera position and look-at target.
+   */
+  const sync = window.MatrixViewerSync.create({
+    vscode,
+    kind: "pointcloud",
+    mount: window.__matrixViewer.showSyncControls === false ? null : syncMount,
+    getState: () => ({
+      kind: "pointcloud",
+      cameraPosition: camera.position.toArray(),
+      cameraTarget: controls.target.toArray(),
+    }),
+    applyState: (s) => {
+      camera.position.fromArray(s.cameraPosition);
+      controls.target.fromArray(s.cameraTarget);
+      // OrbitControls fires "change" from update(); sync-controls.js suppresses
+      // the resulting report so the two panels do not ping-pong.
+      controls.update();
+    },
+  });
 
   function init() {
     infoLabel.textContent = `${data.pointCount} points`;
@@ -46,7 +71,7 @@
     camera.position.set(0, 0, 5);
 
     controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.addEventListener("change", () => broadcastViewport());
+    controls.addEventListener("change", () => sync.report());
 
     buildPoints(data, "xyz");
     animate();
@@ -65,7 +90,15 @@
     window.addEventListener("resize", onResize);
   }
 
-  function buildPoints(d, colorMode) {
+  /**
+   * (Re)build the point geometry.
+   *
+   * @param {PointCloudData} d
+   * @param {string} colorMode
+   * @param {boolean} [recentreCamera=true] Pass false to keep the current
+   *   camera, e.g. on a synced refresh where the group owns the viewport.
+   */
+  function buildPoints(d, colorMode, recentreCamera) {
     if (points) { scene.remove(points); }
 
     const n = d.pointCount;
@@ -87,6 +120,10 @@
 
     points = new THREE.Points(geometry, material);
     scene.add(points);
+
+    if (recentreCamera === false) {
+      return;
+    }
 
     // Centre camera on bounding box
     const bbox = geometry.boundingBox;
@@ -149,14 +186,6 @@
     renderer.setSize(container.clientWidth, container.clientHeight);
   }
 
-  function broadcastViewport() {
-    vscode.postMessage({
-      type: "syncViewport",
-      cameraPosition: camera.position.toArray(),
-      cameraTarget: controls.target.toArray(),
-    });
-  }
-
   function savePly() {
     const lines = ["ply", "format ascii 1.0", `element vertex ${data.pointCount}`];
     lines.push("property float x", "property float y", "property float z");
@@ -182,16 +211,15 @@
     URL.revokeObjectURL(url);
   }
 
+  // Sync messages ("sync/*") are handled inside sync-controls.js.
   window.addEventListener("message", (e) => {
     const msg = e.data;
     if (msg.type === "update" && msg.data) {
       data = msg.data;
       infoLabel.textContent = `${data.pointCount} points`;
-      buildPoints(data, selColorAxis.value);
-    } else if (msg.type === "syncViewport" && msg.cameraPosition) {
-      camera.position.fromArray(msg.cameraPosition);
-      controls.target.fromArray(msg.cameraTarget);
-      controls.update();
+      // While synced, a refresh must not recentre the camera — the group owns
+      // the viewport.
+      buildPoints(data, selColorAxis.value, !sync.isSynced());
     }
   });
 

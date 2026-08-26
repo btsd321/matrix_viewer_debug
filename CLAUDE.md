@@ -64,6 +64,30 @@ Before type detection or data fetching, all C++ pointer wrappers are unwrapped: 
 
 When GDB doesn't report `cv::Mat` as the type name, `detectCvMatFromChildren()` in `debuggerBase.ts` checks for the presence of child fields `flags`, `dims`, `rows`, `cols`, `data` — if 4+ match, it classifies as `cv::Mat`.
 
+### View sync (`src/sync/`)
+
+Panels of the same viewer kind can be joined into an N-way sync group whose viewport is mirrored across all members. The dependency direction is inverted relative to the panels:
+
+```
+media/sync-controls.js  ──sync/* postMessage──▶  SyncCoordinator ──▶ SyncGroupStore
+                        ◀──sync/apply|peers|status──┘        via ISyncPanelHost (PanelManager)
+```
+
+- `ISyncTypes.ts` — declarations only. `ISyncPanelHost` is what the coordinator needs from `PanelManager`; `ISyncStateReader` is the read-only view the TreeView uses.
+- `syncGroupStore.ts` — all membership state. **No `vscode` import**: logging arrives as an injected `LogFn` (exported from `src/log/logger.ts`) so the store is unit-testable without an extension host.
+- `syncCoordinator.ts` — the only place that knows both sides. Owns broadcast, peer eligibility, and echo suppression.
+- `syncCommands.ts` — `matrixViewer.syncPair` / `matrixViewer.syncUnpair`.
+- `media/sync-controls.js` — one shared toolbar control used by all three viewers; message names mirror `syncProtocol.ts` exactly.
+
+Viewers never import from `sync/` and never handle `sync/*` messages: they create a controller and call `sync.report()` after each local viewport gesture.
+
+Two behaviours are load-bearing and easy to break:
+
+1. **Echo suppression** — applying a remote viewport fires the same change handlers a user gesture would, so `sync-controls.js` drops reports while `applyingRemote` is set.
+2. **Swallow-first-report** — a panel that joins a group with an established viewport has not applied it yet; its first spontaneous report carries its own default viewport, so the store discards it instead of yanking the whole group back to fit.
+
+Note that a sync group is unrelated to `matrixViewer.addToGroup`, which is display-only grouping in the TreeView.
+
 ## Logging
 
 Use the singleton `logger` from `src/log/logger.ts`. Never use `console.log`. Import only what's needed:

@@ -10,29 +10,57 @@ import * as vscode from "vscode";
 
 import { getAdapter } from "./adapters/adapterRegistry";
 import { PanelManager } from "./utils/panelManager";
+import { ISyncStateReader } from "./sync/ISyncTypes";
 import { logger } from "./log/logger";
 
 // ── Tree Node Types ────────────────────────────────────────────────────────
 
 export type MvVariableKind = "image" | "plot" | "pointcloud" | "unknown";
 
+/** Sync membership of one variable, as rendered in the tree. */
+export interface MvSyncBadge {
+    groupIndex: number;
+    partners: string[];
+}
+
 export class MvVariableItem extends vscode.TreeItem {
     constructor(
         public readonly variableName: string,
         public readonly kind: MvVariableKind,
         public readonly typeLabel: string = "",
-        public readonly shapeLabel: string = ""
+        public readonly shapeLabel: string = "",
+        public readonly sync?: MvSyncBadge
     ) {
         super(variableName, vscode.TreeItemCollapsibleState.None);
-        this.contextValue = "mvVariable";
-        this.description = shapeLabel ? `${typeLabel}  ${shapeLabel}` : typeLabel;
-        this.tooltip = `${variableName}: ${typeLabel} ${shapeLabel}`.trim();
+        // The context value drives which menu items appear: only synced
+        // variables offer "Unsync".
+        this.contextValue = sync ? "mvVariableSynced" : "mvVariable";
+
+        const base = shapeLabel ? `${typeLabel}  ${shapeLabel}` : typeLabel;
+        this.description = sync ? `${base}  ⇄${sync.groupIndex + 1}` : base;
+
+        this.tooltip = sync
+            ? `${variableName}: ${typeLabel} ${shapeLabel}`.trim() +
+            `\nSynced (group ${sync.groupIndex + 1}) with: ${sync.partners.join(", ")}`
+            : `${variableName}: ${typeLabel} ${shapeLabel}`.trim();
+
         this.iconPath = MvVariableItem.iconFor(kind);
         this.command = {
             command: "matrixViewer.viewVariable",
             title: "Visualize",
             arguments: [this],
         };
+    }
+
+    /** Copy of this item carrying different sync state. */
+    withSync(sync: MvSyncBadge | undefined): MvVariableItem {
+        return new MvVariableItem(
+            this.variableName,
+            this.kind,
+            this.typeLabel,
+            this.shapeLabel,
+            sync
+        );
     }
 
     private static iconFor(kind: MvVariableKind): vscode.ThemeIcon {
@@ -78,7 +106,8 @@ export class MvVariablesProvider
 
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly panelManager: PanelManager
+        private readonly panelManager: PanelManager,
+        private readonly syncState?: ISyncStateReader
     ) { }
 
     // ── TreeDataProvider interface ───────────────────────────────────────────
@@ -103,13 +132,13 @@ export class MvVariablesProvider
             [...this.groups.values()].flat()
         );
 
-        // User-defined groups
+        // User-defined groups (display grouping — unrelated to sync groups)
         for (const [groupName, varNames] of this.groups) {
             const group = new MvGroupItem(groupName);
             for (const name of varNames) {
                 const item = this.pinnedVars.get(name);
                 if (item) {
-                    group.children.push(item);
+                    group.children.push(this.decorate(item));
                 }
             }
             if (group.children.length > 0) {
@@ -120,11 +149,29 @@ export class MvVariablesProvider
         // Ungrouped variables
         for (const [name, item] of this.pinnedVars) {
             if (!groupedVarNames.has(name)) {
-                nodes.push(item);
+                nodes.push(this.decorate(item));
             }
         }
 
         return nodes;
+    }
+
+    /**
+     * Attach current sync membership to an item.
+     *
+     * Sync state lives in the coordinator, not in the item, so it is read at
+     * render time — the tree only has to be refreshed, never rebuilt.
+     */
+    private decorate(item: MvVariableItem): MvVariableItem {
+        if (!this.syncState) {
+            return item;
+        }
+        const groupIndex = this.syncState.getGroupIndex(item.variableName);
+        if (groupIndex === undefined) {
+            return item.sync ? item.withSync(undefined) : item;
+        }
+        const partners = this.syncState.getPartners(item.variableName);
+        return item.withSync({ groupIndex, partners });
     }
 
     // ── Public API ───────────────────────────────────────────────────────────

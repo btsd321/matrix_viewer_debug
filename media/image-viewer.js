@@ -5,7 +5,8 @@
  * the image on a <canvas> element. Handles zoom/pan, normalisation,
  * colormap, channel reorder, hover info, and save actions.
  *
- * Also listens for postMessage "update" and "syncViewport" from the extension.
+ * Listens for postMessage "update" from the extension. Viewport
+ * synchronisation is delegated to media/sync-controls.js.
  *
  * @typedef {import('../src/matImage/matProvider').ImageData} ImageData
  */
@@ -58,6 +59,26 @@
   const chkBGR = /** @type {HTMLInputElement} */ (document.getElementById("chk-bgr2rgb"));
   const btnReset = document.getElementById("btn-reset");
   const btnSavePng = document.getElementById("btn-save-png");
+  const syncMount = document.getElementById("sync-controls");
+
+  // ── View sync ─────────────────────────────────────────────────────────────
+
+  /**
+   * Viewport synchronisation controller (media/sync-controls.js).
+   * Reports {zoom, panX, panY} to the extension and applies peer viewports.
+   */
+  const sync = window.MatrixViewerSync.create({
+    vscode,
+    kind: "image",
+    mount: window.__matrixViewer.showSyncControls === false ? null : syncMount,
+    getState: () => ({ kind: "image", zoom, panX, panY }),
+    applyState: (s) => {
+      zoom = s.zoom;
+      panX = s.panX;
+      panY = s.panY;
+      renderImage(currentData).catch(console.error);
+    },
+  });
 
   // ── Init ──────────────────────────────────────────────────────────────────
 
@@ -316,7 +337,7 @@
     panY = cy - (cy - panY) * (newZoom / zoom);
     zoom = newZoom;
     renderImage(currentData).catch(console.error);
-    broadcastViewport();
+    sync.report();
   }
 
   function onMouseDown(e) {
@@ -330,7 +351,7 @@
       panX = e.clientX - dragStartX;
       panY = e.clientY - dragStartY;
       renderImage(currentData).catch(console.error);
-      broadcastViewport();
+      sync.report();
     }
 
     // Hover pixel info
@@ -359,6 +380,8 @@
   function resetView() {
     fitToWindow(currentData);
     renderImage(currentData).catch(console.error);
+    // Reset is a deliberate gesture, so the group follows it.
+    sync.report();
   }
 
   // ── Pixel Inspection ──────────────────────────────────────────────────────
@@ -402,13 +425,8 @@
     });
   }
 
-  // ── Sync ──────────────────────────────────────────────────────────────────
-
-  function broadcastViewport() {
-    vscode.postMessage({ type: "syncViewport", zoom, panX, panY });
-  }
-
   // ── VS Code message listener ──────────────────────────────────────────────
+  // Sync messages ("sync/*") are handled inside sync-controls.js.
 
   window.addEventListener("message", (e) => {
     const msg = e.data;
@@ -423,12 +441,11 @@
       chkBGR.checked = swapBGR;
       const fmtStr = currentData.format ? `  ${currentData.format}` : "";
       infoLabel.textContent = `${currentData.height}×${currentData.width}  ch:${currentData.channels}  ${currentData.dtype}${fmtStr}`;
-      fitToWindow(currentData);
-      renderImage(currentData).catch(console.error);
-    } else if (msg.type === "syncViewport") {
-      zoom = msg.zoom;
-      panX = msg.panX;
-      panY = msg.panY;
+      // A refresh re-fits the image, which changes the viewport. When synced,
+      // keep the group's viewport instead of imposing this panel's fit.
+      if (!sync.isSynced()) {
+        fitToWindow(currentData);
+      }
       renderImage(currentData).catch(console.error);
     }
   });

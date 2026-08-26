@@ -8,7 +8,9 @@
 import * as vscode from "vscode";
 import { MvVariablesProvider, MvVariableItem } from "./mvVariablesProvider";
 import { PanelManager } from "./utils/panelManager";
-import { SyncManager } from "./utils/syncManager";
+import { SyncCoordinator } from "./sync/syncCoordinator";
+import { SyncGroupStore } from "./sync/syncGroupStore";
+import { registerSyncCommands } from "./sync/syncCommands";
 import { getAdapter } from "./adapters/adapterRegistry";
 import { logger } from "./log/logger";
 import {
@@ -29,8 +31,20 @@ export function activate(context: vscode.ExtensionContext) {
     logEnvironmentInfo(extVersion);
 
     const panelManager = new PanelManager(context);
-    const syncManager = new SyncManager();
-    const variablesProvider = new MvVariablesProvider(context, panelManager);
+
+    // View sync: PanelManager is the panel host, SyncGroupStore holds membership.
+    // Logging is injected into the store so it stays free of the vscode API.
+    const syncStore = new SyncGroupStore((level, msg) => logger[
+        level.toLowerCase() as "debug" | "info" | "warn" | "error"
+    ](msg));
+    const syncCoordinator = new SyncCoordinator(panelManager, syncStore);
+    context.subscriptions.push(syncCoordinator);
+
+    const variablesProvider = new MvVariablesProvider(
+        context,
+        panelManager,
+        syncCoordinator
+    );
 
     /** Names of variables known to be visualizable in the current debug session. */
     let visualizableVarNames = new Set<string>();
@@ -64,12 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showWarningMessage("MatrixViewer: could not resolve variable name from context.");
                     return;
                 }
-                await visualizeVariable(
-                    varName,
-                    context,
-                    panelManager,
-                    syncManager
-                );
+                await visualizeVariable(varName, context, panelManager);
             }
         )
     );
@@ -136,31 +145,17 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showWarningMessage("MatrixViewer: No variable under cursor.");
                     return;
                 }
-                await visualizeVariable(varName, context, panelManager, syncManager);
+                await visualizeVariable(varName, context, panelManager);
             }
         )
     );
 
+    // matrixViewer.syncPair / matrixViewer.syncUnpair
+    registerSyncCommands(context, syncCoordinator, () => variablesProvider.refresh());
+
+    // Keep the TreeView badges in step with group changes made from the panels.
     context.subscriptions.push(
-        vscode.commands.registerCommand(
-            "matrixViewer.syncPair",
-            async (item: MvVariableItem) => {
-                const existing = syncManager.getPendingPair();
-                if (!existing) {
-                    syncManager.startPairing(item.variableName);
-                    logger.info(`Selected "${item.variableName}" for sync pairing.`);
-                    vscode.window.showInformationMessage(
-                        `MatrixViewer: selected "${item.variableName}" for sync pairing. Now select the second variable.`
-                    );
-                } else {
-                    syncManager.completePairing(item.variableName, panelManager);
-                    logger.info(`Synced pair: "${existing}" <-> "${item.variableName}".`);
-                    vscode.window.showInformationMessage(
-                        `MatrixViewer: "${existing}" and "${item.variableName}" are now synced.`
-                    );
-                }
-            }
-        )
+        syncCoordinator.onDidChangeSyncState(() => variablesProvider.refresh())
     );
 
     context.subscriptions.push(
@@ -258,6 +253,9 @@ export function activate(context: vscode.ExtensionContext) {
     // Clean up panels and provider state when debug session ends.
     context.subscriptions.push(
         vscode.debug.onDidTerminateDebugSession(() => {
+            // Clear sync groups before the panels go away, so the coordinator can
+            // still reach the webviews it needs to notify.
+            syncCoordinator.clear();
             panelManager.dispose();
             variablesProvider.clear();
             visualizableVarNames.clear();
@@ -273,8 +271,7 @@ export function activate(context: vscode.ExtensionContext) {
 async function visualizeVariable(
     varName: string,
     context: vscode.ExtensionContext,
-    panelManager: PanelManager,
-    syncManager: SyncManager
+    panelManager: PanelManager
 ): Promise<void> {
     logger.debug(`visualizeVariable called: varName="${varName}"`);
     logger.channel?.show(true);
@@ -338,7 +335,7 @@ async function visualizeVariable(
                     const data = await adapter.fetchImageData(session, varName, varInfo!);
                     logger.debug(`fetchImageData result: ${data ? "OK" : "null"}`);
                     if (data) {
-                        panelManager.openImagePanel(varName, data, context, syncManager);
+                        panelManager.openImagePanel(varName, data, context);
                     } else {
                         vscode.window.showWarningMessage(
                             `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
@@ -351,7 +348,7 @@ async function visualizeVariable(
                     const data = await adapter.fetchPlotData(session, varName, varInfo!);
                     logger.debug(`fetchPlotData result: ${data ? "OK" : "null"}`);
                     if (data) {
-                        panelManager.openPlotPanel(varName, data, context, syncManager);
+                        panelManager.openPlotPanel(varName, data, context);
                     } else {
                         vscode.window.showWarningMessage(
                             `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`
@@ -364,12 +361,7 @@ async function visualizeVariable(
                     const data = await adapter.fetchPointCloudData(session, varName, varInfo!);
                     logger.debug(`fetchPointCloudData result: ${data ? "OK" : "null"}`);
                     if (data) {
-                        panelManager.openPointCloudPanel(
-                            varName,
-                            data,
-                            context,
-                            syncManager
-                        );
+                        panelManager.openPointCloudPanel(varName, data, context);
                     } else {
                         vscode.window.showWarningMessage(
                             `MatrixViewer: "${varName}" — 不支持的数据结构 (unsupported data structure).`

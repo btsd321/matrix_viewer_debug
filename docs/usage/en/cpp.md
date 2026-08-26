@@ -301,12 +301,20 @@ Renders 3D point clouds using Three.js + OrbitControls.
 
 ## View Sync
 
-Pair two open viewer panels so their viewport stays in sync:
+Pair open viewer panels so their viewport stays in sync:
 
 1. Open two viewer panels.
-2. In either panel, click **Sync** and select the other panel.
+2. In either panel, click **Sync ▾** in the toolbar and select the other panel.
 3. Moving the viewport in one panel mirrors it in the other.
-4. Click **Unsync** to break the pair.
+4. Click **Unsync** to leave the group.
+
+Notes:
+
+- **Only panels of the same viewer type can be synced** — the dropdown lists only panels of the matching type (image / plot / point cloud).
+- **More than two panels can be synced.** Adding a third panel extends the group; connecting two groups merges them. Members are labelled `⇄1`, `⇄2`, … in the toolbar and in the **MatrixViewer Debug** sidebar.
+- Images sync zoom and pan, plots sync the visible X/Y data range, point clouds sync camera position and target. Plots in **Histogram** mode do not participate.
+- The same actions are available from the sidebar: right-click a variable → **Sync with…** / **Unsync**.
+- Sync groups are cleared when the debug session ends. Set `matrixViewer.sync.showToolbarControls` to `false` to use the sidebar menu only.
 
 ---
 

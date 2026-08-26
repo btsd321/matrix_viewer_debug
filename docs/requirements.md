@@ -140,11 +140,20 @@
 
 ### 3.5 视图同步（View Sync）
 
-- 支持将两个变量**配对**，实现可视化联动：
-  - 图像查看器之间：同步缩放和平移
-  - 3D 查看器之间：同步旋转和缩放
-  - 曲线查看器之间：同步缩放和平移范围
-- 在 TreeView 中通过右键菜单配对变量
+- 支持将**两个及以上**同类型变量加入同一个**同步组**，实现可视化联动：
+  - 图像查看器之间：同步缩放和平移（`zoom` / `panX` / `panY`）
+  - 3D 查看器之间：同步相机位置与目标点（`cameraPosition` / `cameraTarget`）
+  - 曲线查看器之间：同步 X/Y 可见数据范围（`xMin`/`xMax`/`yMin`/`yMax`，因此长度不同的序列也能对齐；Histogram 模式不参与）
+- **仅同类型面板可同步**：跨类型的配对请求被拒绝（`kind-mismatch`）
+- 组语义：
+  - 将第三个面板加入已有组 → 扩展该组
+  - 连接两个已有组 → 合并为一个组，保留**较早**建立的组及其视口
+  - 成员数降至 1 时自动解散该组
+- 入口：
+  - 面板工具栏内的 `Sync ▾` 下拉框与 `Unsync` 按钮（可通过 `matrixViewer.sync.showToolbarControls` 关闭）
+  - TreeView 右键菜单 **Sync with…** / **Unsync**
+- 已同步的变量在 TreeView 中显示 `⇄N` 组标记，tooltip 列出同组成员
+- 面板关闭时自动退出同步组；调试会话结束时清空所有同步组
 
 ### 3.6 自动刷新（Auto Refresh）
 
@@ -219,8 +228,13 @@ src/
 ├── utils/
 │   ├── debugger.ts           # 兼容 re-export → adapters/python/pythonDebugger
 │   ├── pythonTypes.ts        # 兼容 re-export → adapters/python/pythonTypes
-│   ├── panelManager.ts       # Webview 面板生命周期、自动刷新（使用 IDebugAdapter）
-│   └── syncManager.ts        # 变量配对同步管理
+│   └── panelManager.ts       # Webview 面板生命周期、自动刷新（使用 IDebugAdapter）；实现 ISyncPanelHost
+├── sync/                     # 视图同步模块
+│   ├── ISyncTypes.ts         # 仅接口定义：ViewportState / ISyncGroupStore / ISyncPanelHost / ISyncStateReader
+│   ├── syncProtocol.ts       # "sync/*" 消息协议（与 media/sync-controls.js 一一对应）
+│   ├── syncGroupStore.ts     # N 路同步组状态机（不依赖 vscode，日志经 LogFn 注入）
+│   ├── syncCoordinator.ts    # 编排：Webview 消息 ↔ 状态机 ↔ 广播
+│   └── syncCommands.ts       # matrixViewer.syncPair / syncUnpair 命令层
 ├── matImage/
 │   ├── matProvider.ts        # 兼容 re-export → adapters/python/imageProvider
 │   └── matWebview.ts         # 图像 Webview HTML 模板
@@ -344,7 +358,7 @@ Webview 渲染
 - [x] PIL.Image 支持
 - [x] PyTorch Tensor 支持
 - [x] 3D 点云查看器（Three.js）
-- [x] 视图同步（配对联动）
+- [x] 视图同步（同步组联动，面板内 `Sync ▾` / `Unsync` 控件）
 - [x] 自定义 X 轴（Plot Viewer）
 - [x] 右键菜单集成
 
@@ -467,8 +481,12 @@ Webview 渲染
 | `src/adapters/cpp/codelldb/pointCloudProvider.ts` | ✅ | CodeLLDB 点云分发器 |
 | `src/adapters/cpp/codelldb/libs/{opencv,eigen,pcl,std,qt}/` | ✅ | CodeLLDB 各库提供器（仅含 LLDB 路径）|
 | `src/viewers/viewerTypes.ts` | ✅ | 语言无关统一展示数据类型 |
-| `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新、sync broadcast（使用 IDebugAdapter）|
-| `src/utils/syncManager.ts` | ✅ | idle → waiting → paired 状态机 |
+| `src/utils/panelManager.ts` | ✅ | Webview 面板生命周期、自动刷新（使用 IDebugAdapter）；实现 ISyncPanelHost，仅转发消息 |
+| `src/sync/ISyncTypes.ts` | ✅ | 视图同步接口与类型定义（无逻辑）|
+| `src/sync/syncProtocol.ts` | ✅ | `sync/*` 消息协议与类型守卫 |
+| `src/sync/syncGroupStore.ts` | ✅ | N 路同步组状态机（join / leave / merge / 首次上报吞掉），不依赖 vscode |
+| `src/sync/syncCoordinator.ts` | ✅ | 消息分发、广播、回声抑制、`onDidChangeSyncState` |
+| `src/sync/syncCommands.ts` | ✅ | `syncPair`（QuickPick）/ `syncUnpair` 命令 |
 | `src/matImage/matWebview.ts` | ✅ | 图像 HTML 模板（CSP nonce）|
 | `src/plot/plotWebview.ts` | ✅ | 曲线图 HTML 模板（uPlot）|
 | `src/pointCloud/pointCloudWebview.ts` | ✅ | 点云 HTML 模板（Three.js）|
@@ -476,9 +494,10 @@ Webview 渲染
 #### 前端资源 media/（逻辑完整）
 | 文件 | 状态 | 说明 |
 |------|------|------|
-| `image-viewer.js` | ✅ | Canvas 渲染、zoom/pan、colormap、hover 像素值、Save PNG |
-| `plot-viewer.js` | ✅ | uPlot 封装、Line/Scatter/Histogram、Save PNG/CSV |
-| `pointcloud-viewer.js` | ✅ | Three.js 场景、OrbitControls、按轴着色、Save PLY |
+| `image-viewer.js` | ✅ | Canvas 渲染、zoom/pan、colormap、hover 像素值、Save PNG、视口同步 |
+| `plot-viewer.js` | ✅ | uPlot 封装、Line/Scatter/Histogram、Save PNG/CSV、视口同步（Histogram 除外）|
+| `pointcloud-viewer.js` | ✅ | Three.js 场景、OrbitControls、按轴着色、Save PLY、相机同步 |
+| `sync-controls.js` | ✅ | 三个查看器共用的 `Sync ▾` / `Unsync` 工具栏控件 |
 | `colormaps.js` | ✅ | gray / jet / hot / viridis / plasma LUT |
 | `image-viewer.css` / `plot-viewer.css` / `pointcloud-viewer.css` | ✅ | 样式 |
 | `uplot.iife.min.js` | ✅ 已下载（uPlot latest）|

@@ -94,8 +94,13 @@ src/
 ├── viewers/
 │   └── viewerTypes.ts        # Language-agnostic display data contracts (ImageData, PlotData, PointCloudData)
 ├── utils/
-│   ├── panelManager.ts       # Webview panel lifecycle and refresh (uses IDebugAdapter)
-│   └── syncManager.ts        # View sync pair state machine
+│   └── panelManager.ts       # Webview panel lifecycle and refresh (uses IDebugAdapter); implements ISyncPanelHost
+├── sync/                     # View synchronisation domain module
+│   ├── ISyncTypes.ts         # Interfaces only: ViewportState, ISyncGroupStore, ISyncPanelHost, ISyncStateReader
+│   ├── syncProtocol.ts       # "sync/*" message contract (mirrors media/sync-controls.js)
+│   ├── syncGroupStore.ts     # N-way group membership state machine (no vscode import, injected LogFn)
+│   ├── syncCoordinator.ts    # Orchestration: webview messages ↔ store ↔ broadcast
+│   └── syncCommands.ts       # matrixViewer.syncPair / syncUnpair command layer
 ├── matImage/
 │   └── matWebview.ts         # Build HTML for the image viewer webview
 ├── plot/
@@ -108,6 +113,7 @@ media/                        # Static front-end assets (served by webviews)
 ├── plot-viewer.js / .css     # uPlot wrapper
 ├── pointcloud-viewer.js/.css # Three.js point cloud scene
 ├── colormaps.js              # Colormap LUTs (gray, jet, viridis, hot, plasma)
+├── sync-controls.js          # Shared "Sync ▾ / Unsync" toolbar control for all three viewers
 ├── uplot.iife.min.js         # uPlot chart library (vendored)
 ├── three.min.js              # Three.js (vendored)
 └── OrbitControls.js          # Three.js OrbitControls (vendored)
@@ -123,6 +129,7 @@ media/                        # Static front-end assets (served by webviews)
 - **DAP evaluate for Python** — All Python data is fetched via `debugSession.customRequest("evaluate", …)`. No memory reads. Small arrays → JSON (`tolist()`), large arrays → Base64 (`tobytes()`).
 - **Webview CSP** — Every webview sets a strict Content-Security-Policy with a per-load nonce.
 - **One panel per variable** — `PanelManager` deduplicates: clicking a variable that already has an open panel just focuses it.
+- **Inverted sync dependency** — `SyncCoordinator` depends on the `ISyncPanelHost` interface, which `PanelManager` implements; panels and webview builders never import anything from `sync/`. `SyncGroupStore` holds all membership state, has no `vscode` import, and receives logging as an injected `LogFn` so it is unit-testable outside an extension host (`src/test/syncGroupStore.test.ts`). The TreeView reads state through the read-only `ISyncStateReader`.
 
 ---
 
@@ -165,7 +172,11 @@ media/                        # Static front-end assets (served by webviews)
 - `adapters/<lang>/<debugger>/*Provider.ts` (coordinators) → iterate providers list; delegate to first `canHandle()` match; return to language adapter.
 - `viewers/viewerTypes.ts` → **plain data contracts only**; no logic, no imports.
 - `*Webview.ts` → HTML string generation only; no data fetching.
-- `panelManager.ts` → panel lifecycle + refresh via `IDebugAdapter`; no language-specific code.
+- `panelManager.ts` → panel lifecycle + refresh via `IDebugAdapter`; no language-specific code. Implements `ISyncPanelHost` by relaying messages only — **no sync semantics here**.
+- `sync/ISyncTypes.ts` → interfaces and type declarations only; no logic, no state.
+- `sync/syncGroupStore.ts` → membership state only; **no `vscode` import**, no DAP, no webview access. Logging via the injected `LogFn`.
+- `sync/syncCoordinator.ts` → the only file that knows both the store and the panels; owns broadcast and eligibility policy.
+- `sync/syncCommands.ts` → QuickPick / notification plumbing; no state of its own.
 
 ### libs/ internal file placement rules
 
@@ -242,8 +253,22 @@ Is the function used by more than one libName/ folder?
 - Vanilla JS, no TypeScript, no bundler — files are served directly.
 - Each file is an IIFE `(function() { … })()`.
 - Communicate with the extension host only via `vscode.postMessage()` and `window.addEventListener("message", …)`.
-- Incoming messages from the extension: `{ type: "update", data }` and `{ type: "syncViewport", … }`.
-- Outgoing messages to the extension: `{ type: "syncViewport", … }`.
+- Data messages: incoming `{ type: "update", data }`.
+- **View sync messages** are namespaced `sync/*` and defined once in `src/sync/syncProtocol.ts`. `media/sync-controls.js` mirrors those exact strings — changing one side without the other silently breaks synchronisation.
+  - Webview → extension: `sync/ready`, `sync/join`, `sync/leave`, `sync/state`
+  - Extension → webview: `sync/peers`, `sync/status`, `sync/apply`
+- Viewers do **not** handle `sync/*` themselves. They create one controller and report local viewport changes:
+  ```js
+  const sync = window.MatrixViewerSync.create({
+    vscode, kind: "image", mount: document.getElementById("sync-controls"),
+    getState: () => ({ kind: "image", zoom, panX, panY }),
+    applyState: (s) => { /* apply + redraw */ },
+  });
+  sync.report();          // after any local viewport gesture
+  sync.isSynced();        // true when this panel has partners
+  ```
+  `sync-controls.js` coalesces reports per animation frame and suppresses echoes while a remote viewport is being applied.
+- The webview runs in a separate process, so `src/log/logger.ts` is unreachable from `media/`. Sync diagnostics are logged on the extension side in `SyncCoordinator`. Do not add `console.log` to `sync-controls.js`.
 
 ### Security
 
@@ -293,7 +318,16 @@ For both:
 
 1. Declare it in `package.json` under `contributes.commands`.
 2. Add it to the appropriate `contributes.menus` entry.
-3. Register it with `vscode.commands.registerCommand` in `extension.ts`.
+3. Register it with `vscode.commands.registerCommand` in `extension.ts`, or in the owning domain module's command file (e.g. `sync/syncCommands.ts`) when the command belongs to one.
+
+### Extend view synchronisation to a new viewer kind
+
+1. Add the kind to `SyncKind` and define its `*ViewportState` in `src/sync/ISyncTypes.ts`; extend `isViewportState()` and `describeViewportState()` in `syncProtocol.ts`.
+2. In the viewer's `media/*.js`, create a controller via `window.MatrixViewerSync.create({…})` and call `sync.report()` from every gesture that changes the viewport.
+3. Add `<span id="sync-controls"></span>` to the toolbar in the corresponding `*Webview.ts`, load `sync-controls.js`, and inject `showSyncControls`.
+4. Add the `.sync-controls` / `.sync-status` rules to that viewer's CSS.
+
+Panels of different kinds are never placed in the same group — `SyncGroupStore.join()` rejects them with `kind-mismatch`.
 
 ---
 

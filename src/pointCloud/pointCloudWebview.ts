@@ -26,6 +26,9 @@ export function buildPointCloudWebviewHtml(
         );
 
     const nonce = generateNonce();
+    const showSyncControls = vscode.workspace
+        .getConfiguration("matrixViewer")
+        .get<boolean>("sync.showToolbarControls", true);
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -56,14 +59,19 @@ export function buildPointCloudWebviewHtml(
     </label>
     <button id="btn-reset">Reset View</button>
     <button id="btn-save-ply">Save PLY</button>
+    <span id="sync-controls"></span>
   </div>
   <div id="canvas-container"></div>
 
   <script nonce="${nonce}">
-    window.__matrixViewer = { initData: ${JSON.stringify(data)} };
+    window.__matrixViewer = {
+      initData: ${JSON.stringify(data)},
+      showSyncControls: ${showSyncControls}
+    };
   </script>
   <script nonce="${nonce}" src="${mediaUri("three.min.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("OrbitControls.js")}"></script>
+  <script nonce="${nonce}" src="${mediaUri("sync-controls.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("pointcloud-viewer.js")}"></script>
 </body>
 </html>`;

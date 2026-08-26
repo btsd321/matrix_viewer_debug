@@ -18,5 +18,17 @@ body {
 #toolbar button:hover { background: #505050; }
 #toolbar select { background: #3c3c3c; color: var(--text); border: 1px solid var(--border); }
 #stats-label { color: #888; font-size: 11px; margin-right: 8px; }
+
+/* View sync controls — built by media/sync-controls.js */
+.sync-controls {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto; padding-left: 8px; border-left: 1px solid var(--border);
+}
+.sync-controls select:disabled { opacity: 0.5; cursor: default; }
+.sync-status {
+  color: #4fc3f7; font-size: 11px; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 #plot-container { flex: 1; min-height: 0; overflow: hidden; }
 /* NOTE: do NOT override .u-wrap height — uPlot manages it internally */

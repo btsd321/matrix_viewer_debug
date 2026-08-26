@@ -165,14 +165,24 @@ Renders 3D point clouds using Three.js + OrbitControls.
 
 ## View Sync
 
-Two open viewer panels can be paired so their viewport (zoom / pan / rotation) stays in sync.
+Open viewer panels can be paired so their viewport (zoom / pan / rotation) stays in sync.
 
 1. Open two viewer panels for two different variables.
-2. In either panel, click **Sync** and select the other panel from the dropdown.
+2. In either panel, click **Sync ▾** in the toolbar and select the other panel from the dropdown.
 3. Moving the viewport in one panel mirrors the movement in the other.
-4. Click **Unsync** to break the pair.
+4. Click **Unsync** to leave the group.
 
 ![Two Image Viewers side-by-side with View Sync enabled](../../../assets/usage_images/python_view_sync.png)
+
+Notes:
+
+- **Only panels of the same viewer type can be synced.** An image viewer cannot follow a plot or a point cloud, so the dropdown only lists panels of the matching type.
+- **More than two panels can be synced.** Syncing a third panel into an existing pair extends the group; every member then follows every other. Syncing two existing groups together merges them.
+- The synced panels are labelled with a group badge (`⇄1`, `⇄2`, …) in the toolbar and in the **MatrixViewer Debug** sidebar.
+- What gets synchronised depends on the viewer: zoom and pan for images, the visible X/Y data range for plots (so series of different lengths still line up), camera position and target for point clouds. Plots in **Histogram** mode do not participate.
+- The same actions are available from the sidebar: right-click a variable → **Sync with…** / **Unsync**.
+- Sync groups are cleared when the debug session ends.
+- Set `matrixViewer.sync.showToolbarControls` to `false` to hide the in-panel controls and use the sidebar menu only.
 
 ---
 
