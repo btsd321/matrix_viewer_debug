@@ -160,15 +160,21 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand(
-            "matrixViewer.addToGroup",
+            "matrixViewer.addToDisplayGroup",
             async (item: MvVariableItem) => {
-                const groupName = await vscode.window.showInputBox({
-                    prompt: "Enter group name",
-                    placeHolder: "e.g. input/output",
-                });
+                const groupName = await pickDisplayGroup(
+                    variablesProvider.getGroupNames(),
+                    item.displayGroup
+                );
                 if (groupName) {
                     variablesProvider.addToGroup(item.variableName, groupName);
                 }
+            }
+        ),
+        vscode.commands.registerCommand(
+            "matrixViewer.removeFromDisplayGroup",
+            (item: MvVariableItem) => {
+                variablesProvider.removeFromGroup(item.variableName);
             }
         )
     );
@@ -378,6 +384,72 @@ async function visualizeVariable(
             }
         }
     );
+}
+
+/**
+ * Ask which display group a variable should go into.
+ *
+ * Existing groups are offered first so repeat use converges on a few stable
+ * buckets instead of accumulating typos; "New group…" falls back to free text.
+ *
+ * @param existing  Group names already in use.
+ * @param current   The variable's current group, marked and excluded as a target.
+ * @returns The chosen group name, or undefined if cancelled.
+ */
+async function pickDisplayGroup(
+    existing: string[],
+    current: string | undefined
+): Promise<string | undefined> {
+    const NEW_GROUP = Symbol("new-group");
+
+    interface GroupPick extends vscode.QuickPickItem {
+        target: string | typeof NEW_GROUP;
+    }
+
+    const picks: GroupPick[] = existing
+        .filter((name) => name !== current)
+        .map((name) => ({ label: `$(folder) ${name}`, target: name }));
+
+    picks.push({
+        label: "$(new-folder) New group…",
+        detail: "Create a display group with a new name",
+        target: NEW_GROUP,
+    });
+
+    // Only one real choice and it is a brand-new name: skip the QuickPick.
+    const chosen =
+        picks.length === 1
+            ? picks[0]
+            : await vscode.window.showQuickPick(picks, {
+                title: current
+                    ? `Move to display group (currently "${current}")`
+                    : "Add to display group",
+                placeHolder: "Sidebar layout only — does not synchronise viewports",
+            });
+    if (!chosen) {
+        return undefined;
+    }
+
+    if (chosen.target !== NEW_GROUP) {
+        return chosen.target;
+    }
+
+    const name = await vscode.window.showInputBox({
+        title: "New display group",
+        prompt: "Name for the new display group (sidebar layout only)",
+        placeHolder: "e.g. input/output",
+        validateInput: (value) => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+                return "Group name cannot be empty.";
+            }
+            if (existing.includes(trimmed)) {
+                return `A group named "${trimmed}" already exists.`;
+            }
+            return undefined;
+        },
+    });
+    return name?.trim() || undefined;
 }
 
 export function deactivate() { }
