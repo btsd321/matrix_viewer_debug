@@ -60,7 +60,13 @@ export function buildImageWebviewHtml(
     </label>
     <label>BGR→RGB <input type="checkbox" id="chk-bgr2rgb" ${(data.format === "BGR" || data.format === "BGRA") ? "checked" : ""}></label>
     <button id="btn-reset">Reset</button>
-    <button id="btn-save-png">Save PNG</button>
+    <label>Export
+      <select id="sel-export">
+        <option value="png">PNG</option>
+        <option value="tiff">TIFF (lossless)</option>
+      </select>
+    </label>
+    <button id="btn-save">Save</button>
     <span id="sync-controls"></span>
   </div>
 

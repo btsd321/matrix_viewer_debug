@@ -18,7 +18,7 @@
   let mode = data.xValues ? "scatter" : "line";
 
   // Histogram configuration state
-  let histConfig = { type: "bins", bins: 50, step: null };
+  let histConfig = { type: "bins", bins: 50, step: null, yMode: "freq" };
 
   // Current zoom/pan view range; null = auto-fit from data
   let viewRange = null;
@@ -96,7 +96,7 @@
     btnReset.addEventListener("click", () => {
       viewRange = null;
       if (mode === "histogram") {
-        histConfig = { type: "bins", bins: 50, step: null };
+        histConfig = { type: "bins", bins: 50, step: null, yMode: "freq" };
       }
       buildPlot(data);
       // Reset is a deliberate gesture, so the group follows it.
@@ -390,6 +390,13 @@
           <input type="number" id="hist-step-val" min="0" step="any" value="${fmtTick(stepDefault)}"
             style="width:72px;margin-left:auto;background:#3c3c3c;border:1px solid #555;color:#ccc;padding:2px 6px;border-radius:3px">
         </label>
+        <label style="display:flex;align-items:center;gap:8px">
+          Y Axis
+          <select id="hist-ymode" style="margin-left:auto;background:#3c3c3c;border:1px solid #555;color:#ccc;padding:2px 6px;border-radius:3px">
+            <option value="freq" ${histConfig.yMode === "freq" ? "selected" : ""}>Frequency (Count)</option>
+            <option value="density" ${histConfig.yMode === "density" ? "selected" : ""}>Density (Normalized)</option>
+          </select>
+        </label>
       </div>
       <div style="margin-top:14px;font-size:11px;color:#888">Close or press Esc to apply</div>
     `;
@@ -400,10 +407,12 @@
       const type     = box.querySelector("input[name='hist-type']:checked")?.value || "bins";
       const binsVal  = parseInt(box.querySelector("#hist-bins-val").value, 10);
       const stepVal  = parseFloat(box.querySelector("#hist-step-val").value);
+      const yModeVal = box.querySelector("#hist-ymode").value;
       histConfig = {
         type,
         bins: (isNaN(binsVal) || binsVal < 1) ? 50 : Math.min(binsVal, 500),
         step: (isNaN(stepVal) || stepVal <= 0) ? null : stepVal,
+        yMode: yModeVal === "density" ? "density" : "freq",
       };
       document.body.removeChild(overlay);
       buildPlot(data);
@@ -432,9 +441,18 @@
     for (const v of yVals) {
       counts[Math.min(Math.floor((v - lo) / step), BINS - 1)]++;
     }
-    const maxCount = Math.max(...counts);
+
+    // Convert raw counts to the desired Y-axis mode.
+    //   freq     — raw counts (integer)
+    //   density  — count / (N * binWidth), so the bar areas sum to 1
+    //              (probability density, matching matplotlib's density=True)
+    const yMode = histConfig.yMode || "freq";
+    const yValues = (yMode === "density")
+      ? counts.map(c => c / (yVals.length * step))
+      : counts;
+    const yMax = Math.max(...yValues);
     // Add 15% headroom so the tallest bar never touches the top of the plot area
-    const yAxisMax = Math.ceil(maxCount * 1.15) || 1;
+    const yAxisMax = yMax * 1.15 || 1;
 
     const canvas = document.createElement("canvas");
     canvas.width  = width;
@@ -471,19 +489,20 @@
     ctx.strokeStyle = "#4fc3f7";
     ctx.lineWidth   = 1;
     for (let i = 0; i < BINS; i++) {
-      const barH = counts[i] / yAxisMax * ph;
+      const barH = yValues[i] / yAxisMax * ph;
       const bx   = L + i * barW;
       const by   = T + ph - barH;
       ctx.fillRect(bx, by, barW - 1, barH);
       ctx.strokeRect(bx, by, barW - 1, barH);
     }
 
-    // Y tick labels (counts)
+    // Y tick labels
     ctx.fillStyle = "#888"; ctx.font = "11px monospace";
     ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    const yLabel = yMode === "density" ? "Density" : "Count";
     for (let i = 0; i <= YTICKS; i++) {
-      const val = Math.round(yAxisMax * (1 - i / YTICKS));
-      ctx.fillText(val, L - 6, T + i * ph / YTICKS);
+      const val = yAxisMax * (1 - i / YTICKS);
+      ctx.fillText(yMode === "density" ? fmtTick(val) : Math.round(val), L - 6, T + i * ph / YTICKS);
     }
 
     // X tick labels (values)
@@ -500,7 +519,7 @@
     ctx.fillText("Value", L + pw / 2, height);
     ctx.save();
     ctx.translate(12, T + ph / 2); ctx.rotate(-Math.PI / 2);
-    ctx.textBaseline = "top"; ctx.fillText("Count", 0, 0);
+    ctx.textBaseline = "top"; ctx.fillText(yLabel, 0, 0);
     ctx.restore();
 
     // Hover tooltip
@@ -522,8 +541,11 @@
       }
       const binLo = lo + bin * step;
       const binHi = binLo + step;
+      const yVal = yValues[bin];
       tooltipEl.style.display = "block";
-      tooltipEl.textContent   = `[${fmtTick(binLo)}, ${fmtTick(binHi)})  count: ${counts[bin]}`;
+      tooltipEl.textContent   = yMode === "density"
+        ? `[${fmtTick(binLo)}, ${fmtTick(binHi)})  density: ${fmtTick(yVal)}`
+        : `[${fmtTick(binLo)}, ${fmtTick(binHi)})  count: ${counts[bin]}`;
       tooltipEl.style.left    = `${e.clientX + 12}px`;
       tooltipEl.style.top     = `${e.clientY  -  4}px`;
     });
