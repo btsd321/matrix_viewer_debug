@@ -127,7 +127,7 @@
         },
         {
           "command": "matrixViewer.removeFromPanel",
-          "when": "view == matrixViewerPanel && viewItem =~ /^mvVariable/",
+          "when": "view == matrixViewerPanel && viewItem =~ /^(mvVariable|mvUninit)/",
           "group": "inline"
         },
         {

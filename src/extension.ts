@@ -326,6 +326,16 @@ async function visualizeVariable(
         return;
     }
 
+    // Guard: skip visualization for uninitialized / invalid variables.
+    // Attempting to read their memory would yield garbage or crash the inferior.
+    if (varInfo.uninitialized) {
+        vscode.window.showWarningMessage(
+            `MatrixViewer: "${varName}" appears uninitialized or invalid — skipping visualization.`
+        );
+        logger.warn(`Variable "${varName}" is uninitialized or invalid, skipping.`);
+        return;
+    }
+
     const vizType = adapter.detectVisualizableType(varInfo);
     logger.debug(`detectVisualizableType -> "${vizType}"`);
 
