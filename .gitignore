@@ -18,3 +18,4 @@ docs\requirements.md
 *.db-wal
 docs\requirements.md
 settings.json
+.ref_project/
