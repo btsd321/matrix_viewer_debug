@@ -23,6 +23,7 @@
 import * as vscode from "vscode";
 import { VariableInfo } from "../../IDebugAdapter";
 import { logger } from "../../../log/logger";
+import { isUninitializedOrInvalid } from "../shared/uninitializedDetector";
 
 // ── Re-export shared utilities ────────────────────────────────────────────
 
@@ -119,7 +120,7 @@ export async function getVariablesInScope(
             variablesReference: localScopeRef,
         });
 
-        const raw: { name: string; type: string; variablesReference: number; indexedVariables?: number; namedVariables?: number }[] =
+        const raw: { name: string; type: string; value?: string; variablesReference: number; indexedVariables?: number; namedVariables?: number }[] =
             varsResp?.variables ?? [];
 
         const resolved = await Promise.all(
@@ -156,6 +157,7 @@ export async function getVariablesInScope(
                     variablesReference: v.variablesReference,
                     indexedVariables: v.indexedVariables,
                     frameId,
+                    uninitialized: isUninitializedOrInvalid(v.value),
                 };
             })
         );

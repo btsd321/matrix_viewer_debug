@@ -22,7 +22,8 @@
   const selColorAxis = document.getElementById("sel-coloraxis");
   const rngPointSize = document.getElementById("rng-pointsize");
   const btnReset = document.getElementById("btn-reset");
-  const btnSavePly = document.getElementById("btn-save-ply");
+  const btnSave = document.getElementById("btn-save");
+  const selExport = document.getElementById("sel-export");
   const infoLabel = document.getElementById("info-label");
   const syncMount = document.getElementById("sync-controls");
 
@@ -85,7 +86,7 @@
       }
     });
     btnReset.addEventListener("click", resetCamera);
-    btnSavePly.addEventListener("click", savePly);
+    btnSave.addEventListener("click", exportPointCloud);
 
     window.addEventListener("resize", onResize);
   }
@@ -186,29 +187,199 @@
     renderer.setSize(container.clientWidth, container.clientHeight);
   }
 
-  function savePly() {
-    const lines = ["ply", "format ascii 1.0", `element vertex ${data.pointCount}`];
+  // ── Point cloud export ─────────────────────────────────────────────────
+  //
+  // Supports four formats via the <select id="sel-export"> dropdown:
+  //   ply-binary  — little-endian binary PLY with float xyz + uchar rgb
+  //   ply-ascii   — human-readable PLY
+  //   pcd-binary  — PCD v0.7 binary with float xyz + float rgb (packed)
+  //   pcd-ascii   — PCD v0.7 ASCII
+  //
+  // All formats include RGB when data.rgbValues is present.
+
+  function exportPointCloud() {
+    const fmt = selExport.value;
+    const hasRgb = data.rgbValues && data.rgbValues.length === data.pointCount * 3;
+    let blob, ext;
+
+    if (fmt === "ply-binary") {
+      blob = new Blob([generatePlyBinary(data, hasRgb)], { type: "application/octet-stream" });
+      ext = "ply";
+    } else if (fmt === "ply-ascii") {
+      blob = new Blob([generatePlyAscii(data, hasRgb)], { type: "text/plain" });
+      ext = "ply";
+    } else if (fmt === "pcd-binary") {
+      blob = new Blob([generatePcdBinary(data, hasRgb)], { type: "application/octet-stream" });
+      ext = "pcd";
+    } else {
+      blob = new Blob([generatePcdAscii(data, hasRgb)], { type: "text/plain" });
+      ext = "pcd";
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${data.varName}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── PLY encoders ───────────────────────────────────────────────────────
+
+  function generatePlyAscii(d, hasRgb) {
+    const lines = ["ply", "format ascii 1.0", `element vertex ${d.pointCount}`];
     lines.push("property float x", "property float y", "property float z");
-    if (data.rgbValues) {
+    if (hasRgb) {
       lines.push("property uchar red", "property uchar green", "property uchar blue");
     }
     lines.push("end_header");
 
-    for (let i = 0; i < data.pointCount; i++) {
-      let row = `${data.xyzValues[i * 3].toFixed(6)} ${data.xyzValues[i * 3 + 1].toFixed(6)} ${data.xyzValues[i * 3 + 2].toFixed(6)}`;
-      if (data.rgbValues) {
-        row += ` ${Math.round(data.rgbValues[i * 3] * 255)} ${Math.round(data.rgbValues[i * 3 + 1] * 255)} ${Math.round(data.rgbValues[i * 3 + 2] * 255)}`;
+    for (let i = 0; i < d.pointCount; i++) {
+      let row = `${d.xyzValues[i * 3].toFixed(6)} ${d.xyzValues[i * 3 + 1].toFixed(6)} ${d.xyzValues[i * 3 + 2].toFixed(6)}`;
+      if (hasRgb) {
+        row += ` ${Math.round(d.rgbValues[i * 3] * 255)} ${Math.round(d.rgbValues[i * 3 + 1] * 255)} ${Math.round(d.rgbValues[i * 3 + 2] * 255)}`;
       }
       lines.push(row);
     }
+    return lines.join("\n");
+  }
 
-    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${data.varName}.ply`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function generatePlyBinary(d, hasRgb) {
+    // Build ASCII header, then append little-endian binary body.
+    const headerLines = ["ply", "format binary_little_endian 1.0", `element vertex ${d.pointCount}`];
+    headerLines.push("property float x", "property float y", "property float z");
+    if (hasRgb) {
+      headerLines.push("property uchar red", "property uchar green", "property uchar blue");
+    }
+    headerLines.push("end_header");
+    const header = headerLines.join("\n") + "\n";
+
+    const stride = hasRgb ? 15 : 12; // 3 floats (12) + 3 bytes (3)
+    const body = new Uint8Array(d.pointCount * stride);
+    const dv = new DataView(body.buffer);
+
+    for (let i = 0; i < d.pointCount; i++) {
+      const off = i * stride;
+      dv.setFloat32(off,      d.xyzValues[i * 3],     true);
+      dv.setFloat32(off + 4,  d.xyzValues[i * 3 + 1], true);
+      dv.setFloat32(off + 8,  d.xyzValues[i * 3 + 2], true);
+      if (hasRgb) {
+        body[off + 12] = Math.round(d.rgbValues[i * 3] * 255);
+        body[off + 13] = Math.round(d.rgbValues[i * 3 + 1] * 255);
+        body[off + 14] = Math.round(d.rgbValues[i * 3 + 2] * 255);
+      }
+    }
+
+    // Concatenate header + body into a single Uint8Array.
+    const headerBytes = new TextEncoder().encode(header);
+    const result = new Uint8Array(headerBytes.length + body.length);
+    result.set(headerBytes, 0);
+    result.set(body, headerBytes.length);
+    return result;
+  }
+
+  // ── PCD encoders ───────────────────────────────────────────────────────
+  //
+  // PCD stores RGB as a single packed float32 whose bits encode
+  // (blue<<16 | green<<8 | red).  This is the PCL convention so the file
+  // round-trips correctly in pcl::PointCloud<PointXYZRGB>.
+
+  function _packRgbFloat(r, g, b) {
+    // r, g, b are 0–1 floats; convert to 0–255 then pack into a uint32
+    // viewed as a little-endian float32.
+    const ri = Math.round(r * 255);
+    const gi = Math.round(g * 255);
+    const bi = Math.round(b * 255);
+    const packed = (bi << 16) | (gi << 8) | ri;
+    // Reinterpret the uint32 bits as a float32 via DataView.
+    const tmp = new ArrayBuffer(4);
+    new DataView(tmp).setUint32(0, packed >>> 0, true);
+    return new DataView(tmp).getFloat32(0, true);
+  }
+
+  function generatePcdAscii(d, hasRgb) {
+    const fields = hasRgb ? "x y z rgb" : "x y z";
+    const size = hasRgb ? "4 4 4" : "4 4 4";
+    const type = hasRgb ? "F F F" : "F F F";
+    const count = hasRgb ? "1 1 1" : "1 1 1";
+
+    const header = [
+      "# .PCD v0.7 - Point Cloud Data file format",
+      "VERSION 0.7",
+      `FIELDS ${fields}`,
+      `SIZE ${size}`,
+      `TYPE ${type}`,
+      `COUNT ${count}`,
+      `WIDTH ${d.pointCount}`,
+      "HEIGHT 1",
+      "VIEWPOINT 0 0 0 1 0 0 0",
+      `POINTS ${d.pointCount}`,
+      "DATA ascii",
+    ].join("\n") + "\n";
+
+    const lines = [header];
+    for (let i = 0; i < d.pointCount; i++) {
+      const x = d.xyzValues[i * 3].toFixed(6);
+      const y = d.xyzValues[i * 3 + 1].toFixed(6);
+      const z = d.xyzValues[i * 3 + 2].toFixed(6);
+      if (hasRgb) {
+        const rgb = _packRgbFloat(
+          d.rgbValues[i * 3],
+          d.rgbValues[i * 3 + 1],
+          d.rgbValues[i * 3 + 2]
+        );
+        lines.push(`${x} ${y} ${z} ${rgb}`);
+      } else {
+        lines.push(`${x} ${y} ${z}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  function generatePcdBinary(d, hasRgb) {
+    const fields = hasRgb ? "x y z rgb" : "x y z";
+    const size = hasRgb ? "4 4 4" : "4 4 4";
+    const type = hasRgb ? "F F F" : "F F F";
+    const count = hasRgb ? "1 1 1" : "1 1 1";
+
+    const header = [
+      "# .PCD v0.7 - Point Cloud Data file format",
+      "VERSION 0.7",
+      `FIELDS ${fields}`,
+      `SIZE ${size}`,
+      `TYPE ${type}`,
+      `COUNT ${count}`,
+      `WIDTH ${d.pointCount}`,
+      "HEIGHT 1",
+      "VIEWPOINT 0 0 0 1 0 0 0",
+      `POINTS ${d.pointCount}`,
+      "DATA binary",
+    ].join("\n") + "\n";
+
+    const stride = hasRgb ? 16 : 12; // 3 floats + 1 packed rgb float
+    const body = new Uint8Array(d.pointCount * stride);
+    const dv = new DataView(body.buffer);
+
+    for (let i = 0; i < d.pointCount; i++) {
+      const off = i * stride;
+      dv.setFloat32(off,      d.xyzValues[i * 3],     true);
+      dv.setFloat32(off + 4,  d.xyzValues[i * 3 + 1], true);
+      dv.setFloat32(off + 8,  d.xyzValues[i * 3 + 2], true);
+      if (hasRgb) {
+        const rgb = _packRgbFloat(
+          d.rgbValues[i * 3],
+          d.rgbValues[i * 3 + 1],
+          d.rgbValues[i * 3 + 2]
+        );
+        dv.setFloat32(off + 12, rgb, true);
+      }
+    }
+
+    const headerBytes = new TextEncoder().encode(header);
+    const result = new Uint8Array(headerBytes.length + body.length);
+    result.set(headerBytes, 0);
+    result.set(body, headerBytes.length);
+    return result;
   }
 
   // Sync messages ("sync/*") are handled inside sync-controls.js.

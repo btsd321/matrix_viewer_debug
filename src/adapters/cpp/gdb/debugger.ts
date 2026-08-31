@@ -15,6 +15,7 @@
 
 import * as vscode from "vscode";
 import { VariableInfo } from "../../IDebugAdapter";
+import { isUninitializedOrInvalid } from "../shared/uninitializedDetector";
 
 // ── Re-export shared utilities ────────────────────────────────────────────
 
@@ -102,7 +103,7 @@ export async function getVariablesInScope(
             variablesReference: localScopeRef,
         });
 
-        const raw: { name: string; type: string; variablesReference: number }[] =
+        const raw: { name: string; type: string; value?: string; variablesReference: number }[] =
             varsResp?.variables ?? [];
 
         const resolved = await Promise.all(
@@ -133,6 +134,7 @@ export async function getVariablesInScope(
                     type: typeName,
                     variablesReference: v.variablesReference,
                     frameId,
+                    uninitialized: isUninitializedOrInvalid(v.value),
                 };
             })
         );

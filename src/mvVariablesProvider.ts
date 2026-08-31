@@ -30,7 +30,8 @@ export class MvVariableItem extends vscode.TreeItem {
         public readonly typeLabel: string = "",
         public readonly shapeLabel: string = "",
         public readonly sync?: MvSyncBadge,
-        public readonly displayGroup?: string
+        public readonly displayGroup?: string,
+        public readonly uninitialized: boolean = false
     ) {
         super(variableName, vscode.TreeItemCollapsibleState.None);
         // The context value drives which menu items appear. Two independent
@@ -39,8 +40,23 @@ export class MvVariableItem extends vscode.TreeItem {
         //   - "Grouped" → offers "Remove from …"   (display-only tree group)
         // A variable can be in both at once, hence the concatenation rather
         // than a flat enum.
+        // Uninitialized variables get a distinct prefix ("mvUninit") so the
+        // View / Sync / DisplayGroup context-menu items (which match
+        // /^mvVariable/) do not appear — only "Remove from Panel" does.
         this.contextValue =
-            "mvVariable" + (sync ? "Synced" : "") + (displayGroup ? "Grouped" : "");
+            uninitialized
+                ? "mvUninit"
+                : "mvVariable" +
+                  (sync ? "Synced" : "") +
+                  (displayGroup ? "Grouped" : "");
+
+        if (uninitialized) {
+            this.description = "(uninitialized)";
+            this.tooltip = `${variableName}: ${typeLabel} — uninitialized or invalid`;
+            this.iconPath = new vscode.ThemeIcon("warning");
+            // No command — clicking does nothing; the variable is not safe to visualize.
+            return;
+        }
 
         const base = shapeLabel ? `${typeLabel}  ${shapeLabel}` : typeLabel;
         this.description = sync ? `${base}  ⇄${sync.groupIndex + 1}` : base;
@@ -66,7 +82,8 @@ export class MvVariableItem extends vscode.TreeItem {
             this.typeLabel,
             this.shapeLabel,
             sync,
-            this.displayGroup
+            this.displayGroup,
+            this.uninitialized
         );
     }
 
@@ -78,7 +95,8 @@ export class MvVariableItem extends vscode.TreeItem {
             this.typeLabel,
             this.shapeLabel,
             this.sync,
-            displayGroup
+            displayGroup,
+            this.uninitialized
         );
     }
 
@@ -339,6 +357,7 @@ export class MvVariablesProvider
             // Enrich with shape/dtype via adapter
             let shapeLabel = "";
             let typeLabel = v.type ?? "";
+            let uninitialized = false;
             try {
                 const info = await adapter.getVariableInfo(session, v.name, v.frameId);
                 if (info) {
@@ -348,12 +367,16 @@ export class MvVariablesProvider
                         : info.length != null
                             ? `[${info.length}]`
                             : "";
+                    uninitialized = info.uninitialized === true;
                 }
             } catch {
                 // Ignore enrichment failures; still show the variable
             }
 
-            const item = new MvVariableItem(v.name, basicKind, typeLabel, shapeLabel);
+            const item = new MvVariableItem(
+                v.name, basicKind, typeLabel, shapeLabel,
+                undefined, undefined, uninitialized
+            );
             newItems.push(item);
         }
 

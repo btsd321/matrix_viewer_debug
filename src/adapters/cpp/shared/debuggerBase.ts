@@ -15,6 +15,7 @@
 import * as vscode from "vscode";
 import { VariableInfo } from "../../IDebugAdapter";
 import { logger } from "../../../log/logger";
+import { isUninitializedOrInvalid } from "./uninitializedDetector";
 
 export { VariableInfo } from "../../IDebugAdapter";
 
@@ -86,12 +87,19 @@ export async function getVariableInfo(
             return null;
         }
 
+        // Detect uninitialized / invalid variables before any data is read.
+        // The DAP `value` field carries debugger sentinels (e.g.
+        // "<optimized out>", "0xCCCCCCCC") that signal the variable is not
+        // safe to dereference.  Mark it so callers skip data fetching.
+        const uninitialized = isUninitializedOrInvalid(match.value);
+
         return {
             name: match.name,
             type: match.type ?? "",
             typeName: match.type ?? "",
             variablesReference: match.variablesReference,
             frameId: resolvedFrame,
+            uninitialized,
         };
     } catch (e) {
         logger.warn(`[C++] getVariableInfo failed for "${varName}": ${e}`);

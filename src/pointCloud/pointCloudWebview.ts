@@ -7,7 +7,7 @@
  *   - Axis colouring (colour by X / Y / Z using a gradient LUT)
  *   - Per-point RGB colouring when available
  *   - Adjustable point size
- *   - Export PLY button
+ *   - Export PLY (Binary/ASCII) / PCD (Binary/ASCII)
  *   - postMessage API for live refresh and viewport sync
  */
 
@@ -58,7 +58,15 @@ export function buildPointCloudWebviewHtml(
       <input type="range" id="rng-pointsize" min="1" max="10" value="2">
     </label>
     <button id="btn-reset">Reset View</button>
-    <button id="btn-save-ply">Save PLY</button>
+    <label>Export
+      <select id="sel-export">
+        <option value="ply-binary">PLY (Binary)</option>
+        <option value="ply-ascii">PLY (ASCII)</option>
+        <option value="pcd-binary">PCD (Binary)</option>
+        <option value="pcd-ascii">PCD (ASCII)</option>
+      </select>
+    </label>
+    <button id="btn-save">Save</button>
     <span id="sync-controls"></span>
   </div>
   <div id="canvas-container"></div>

@@ -59,6 +59,16 @@ export interface VariableInfo {
      * which would otherwise crash the inferior.
      */
     nullGuardExpression?: string;
+
+    /**
+     * True when the variable's DAP `value` matches a known uninitialized /
+     * invalid sentinel (debugger markers, MSVC debug-heap fill patterns, …).
+     *
+     * Set by the shared C++ adapter after inspecting the raw `value` field of
+     * the DAP `variables` response.  When true, callers should skip data
+     * fetching and show a warning instead of attempting to read garbage memory.
+     */
+    uninitialized?: boolean;
 }
 
 // ── Adapter interface ─────────────────────────────────────────────────────
