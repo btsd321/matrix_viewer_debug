@@ -58,7 +58,8 @@
   const selColormap = /** @type {HTMLSelectElement} */ (document.getElementById("sel-colormap"));
   const chkBGR = /** @type {HTMLInputElement} */ (document.getElementById("chk-bgr2rgb"));
   const btnReset = document.getElementById("btn-reset");
-  const btnSavePng = document.getElementById("btn-save-png");
+  const btnSave = document.getElementById("btn-save");
+  const selExport = document.getElementById("sel-export");
   const syncMount = document.getElementById("sync-controls");
 
   // ── View sync ─────────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@
       renderImage(currentData).catch(console.error);
     });
     btnReset.addEventListener("click", resetView);
-    btnSavePng.addEventListener("click", savePng);
+    btnSave.addEventListener("click", saveImage);
 
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("mousedown", onMouseDown);
@@ -414,6 +415,22 @@
 
   // ── Save ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Dispatch export based on the format dropdown.
+   * PNG:  canvas.toBlob — 8-bit, normalised (lossy for float data).
+   * TIFF: raw pixel bytes encoded directly — preserves original dtype/precision.
+   *       For "png" encoding (Python-side PNG, no raw bytes), falls back to
+   *       an 8-bit RGBA TIFF from the canvas.
+   */
+  function saveImage() {
+    const fmt = selExport.value;
+    if (fmt === "tiff") {
+      saveTiff();
+    } else {
+      savePng();
+    }
+  }
+
   function savePng() {
     canvas.toBlob((blob) => {
       const url = URL.createObjectURL(blob);
@@ -423,6 +440,189 @@
       a.click();
       URL.revokeObjectURL(url);
     });
+  }
+
+  /**
+   * Save a TIFF file preserving the original pixel dtype and precision.
+   *
+   * Two paths:
+   *   raw/deflate encoding — use currentRawBytes (original typed array).
+   *   png encoding         — no raw bytes available; fall back to 8-bit RGBA
+   *                          read from the canvas (getImageData).
+   */
+  async function saveTiff() {
+    const { width, height, channels, dtype } = currentData;
+
+    // Try to get the original raw bytes (decompresses if needed).
+    let rawBytes = await ensureRawBytes(currentData);
+
+    if (rawBytes) {
+      // Original-dtype TIFF — lossless.
+      const tiffData = createTiff(width, height, channels, dtype, rawBytes);
+      _downloadBlob(new Blob([tiffData], { type: "image/tiff" }), "tiff");
+    } else {
+      // PNG-encoding path: no raw bytes.  Read RGBA from the canvas and
+      // write an 8-bit RGBA TIFF.
+      const off = new OffscreenCanvas(width, height);
+      const octx = off.getContext("2d");
+      // Re-render at 1:1 scale so canvas pixels map to image pixels.
+      octx.drawImage(canvas, 0, 0, width, height);
+      // If zoomed/panned, the main canvas may not cover the full image.
+      // Use the cached bitmap or re-render directly instead.
+      const bmp = await ensureBitmap(currentData);
+      if (bmp) {
+        octx.clearRect(0, 0, width, height);
+        octx.drawImage(bmp, 0, 0, width, height);
+      }
+      const imgData = octx.getImageData(0, 0, width, height);
+      // imgData.data is RGBA Uint8ClampedArray — channels = 4.
+      const tiffData = createTiff(width, height, 4, "uint8", imgData.data);
+      _downloadBlob(new Blob([tiffData], { type: "image/tiff" }), "tiff");
+    }
+  }
+
+  function _downloadBlob(blob, ext) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${currentData.varName}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Encode raw pixel data as a little-endian TIFF (baseline, uncompressed).
+   *
+   * Supports all dtypes used by the extension:
+   *   uint8   → 8-bit unsigned   (SampleFormat = 1)
+   *   int8    → 8-bit signed      (SampleFormat = 2)
+   *   uint16  → 16-bit unsigned   (SampleFormat = 1)
+   *   int16   → 16-bit signed     (SampleFormat = 2)
+   *   uint32  → 32-bit unsigned   (SampleFormat = 1)
+   *   int32   → 32-bit signed     (SampleFormat = 2)
+   *   float32 → 32-bit IEEE float (SampleFormat = 3)
+   *   float64 → 64-bit IEEE float (SampleFormat = 3)
+   *
+   * Channel handling:
+   *   1 channel → grayscale (PhotometricInterpretation = 1)
+   *   3 channels → RGB       (PhotometricInterpretation = 2)
+   *   4 channels → RGBA      (PhotometricInterpretation = 2, ExtraSamples = 2 = unassociated alpha)
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {number} channels   1, 3, or 4
+   * @param {string} dtype      "uint8" | "int8" | "uint16" | "int16" | "uint32" | "int32" | "float32" | "float64"
+   * @param {Uint8Array} rawBytes  flat pixel bytes in row-major order
+   * @returns {Uint8Array}  complete TIFF file bytes
+   */
+  function createTiff(width, height, channels, dtype, rawBytes) {
+    // Map dtype → bitsPerSample / sampleFormat / bytesPerSample
+    const dtypeSpec = {
+      "uint8":   { bits: 8,  format: 1, bytes: 1 },
+      "int8":    { bits: 8,  format: 2, bytes: 1 },
+      "uint16":  { bits: 16, format: 1, bytes: 2 },
+      "int16":   { bits: 16, format: 2, bytes: 2 },
+      "uint32":  { bits: 32, format: 1, bytes: 4 },
+      "int32":   { bits: 32, format: 2, bytes: 4 },
+      "float32": { bits: 32, format: 3, bytes: 4 },
+      "float64": { bits: 64, format: 3, bytes: 8 },
+    };
+    const spec = dtypeSpec[dtype] || dtypeSpec["uint8"];
+    const { bits: bitsPerSample, format: sampleFormat, bytes: bytesPerSample } = spec;
+
+    const samplesPerPixel = channels === 1 ? 1 : (channels === 4 ? 4 : 3);
+    const photometric = channels === 1 ? 1 : 2; // 1=grayscale, 2=RGB
+    const rowsPerStrip = height;
+    const stripByteCount = width * height * samplesPerPixel * bytesPerSample;
+
+    // IFD structure
+    // 4 channels needs an ExtraSamples entry → 13 entries, else 12.
+    const numEntries = channels === 4 ? 13 : 12;
+    const headerSize = 8;                        // TIFF header
+    const ifdOffset = headerSize;
+    const ifdSize = 2 + numEntries * 12 + 4;     // count + entries + next-IFD ptr
+    // Extra data area after IFD: BitsPerSample array (if RGB/RGBA), XRes, YRes,
+    // and optionally ExtraSamples array.
+    let extraOffset = ifdOffset + ifdSize;
+    const bitsPerSampleOffset = samplesPerPixel > 1 ? extraOffset : 0;
+    if (samplesPerPixel > 1) { extraOffset += samplesPerPixel * 2; }
+    const xResOffset = extraOffset; extraOffset += 8;
+    const yResOffset = extraOffset; extraOffset += 8;
+    const extraSamplesOffset = channels === 4 ? extraOffset : 0;
+    if (channels === 4) { extraOffset += 2; } // one SHORT for ExtraSamples
+
+    const stripOffset = extraOffset;
+    const totalSize = stripOffset + stripByteCount;
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    const bytes = new Uint8Array(buffer);
+
+    let offset = 0;
+
+    // TIFF header (little endian)
+    view.setUint16(offset, 0x4949, true); offset += 2; // "II" = little endian
+    view.setUint16(offset, 42, true); offset += 2;    // TIFF magic
+    view.setUint32(offset, ifdOffset, true); offset += 4;
+
+    // IFD
+    view.setUint16(offset, numEntries, true); offset += 2;
+
+    function writeEntry(tag, type, count, value) {
+      view.setUint16(offset, tag, true); offset += 2;
+      view.setUint16(offset, type, true); offset += 2;
+      view.setUint32(offset, count, true); offset += 4;
+      if (type === 3 && count === 1) { // SHORT
+        view.setUint16(offset, value, true); offset += 2;
+        view.setUint16(offset, 0, true); offset += 2;
+      } else if (type === 4 && count === 1) { // LONG
+        view.setUint32(offset, value, true); offset += 4;
+      } else {
+        // Value is an offset to the actual data
+        view.setUint32(offset, value, true); offset += 4;
+      }
+    }
+
+    writeEntry(256, 3, 1, width);              // ImageWidth
+    writeEntry(257, 3, 1, height);             // ImageLength
+    // BitsPerSample: for 1 sample, value fits inline; for multi, it's an offset
+    writeEntry(258, 3, samplesPerPixel,
+      samplesPerPixel === 1 ? bitsPerSample : bitsPerSampleOffset);
+    writeEntry(259, 3, 1, 1);                  // Compression = none
+    writeEntry(262, 3, 1, photometric);         // PhotometricInterpretation
+    writeEntry(273, 4, 1, stripOffset);         // StripOffsets
+    writeEntry(277, 3, 1, samplesPerPixel);     // SamplesPerPixel
+    writeEntry(278, 4, 1, rowsPerStrip);        // RowsPerStrip
+    writeEntry(279, 4, 1, stripByteCount);      // StripByteCounts
+    writeEntry(282, 5, 1, xResOffset);          // XResolution
+    writeEntry(283, 5, 1, yResOffset);          // YResolution
+    writeEntry(339, 3, 1, sampleFormat);        // SampleFormat
+    if (channels === 4) {
+      writeEntry(338, 3, 1, 2);                 // ExtraSamples = 2 (unassociated alpha)
+    }
+
+    view.setUint32(offset, 0, true); offset += 4; // Next IFD offset = 0
+
+    // Extra data: BitsPerSample array (multi-sample only)
+    if (samplesPerPixel > 1) {
+      for (let i = 0; i < samplesPerPixel; i++) {
+        view.setUint16(bitsPerSampleOffset + i * 2, bitsPerSample, true);
+      }
+    }
+
+    // Extra data: XResolution (72/1 as RATIONAL)
+    view.setUint32(xResOffset, 72, true);
+    view.setUint32(xResOffset + 4, 1, true);
+    // Extra data: YResolution (72/1 as RATIONAL)
+    view.setUint32(yResOffset, 72, true);
+    view.setUint32(yResOffset + 4, 1, true);
+
+    // Image data — copy raw bytes directly (already in the correct byte order
+    // for little-endian TIFF, since JS typed arrays are platform-endian and
+    // we only run on little-endian platforms in practice).
+    const pixelData = new Uint8Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+    bytes.set(pixelData, stripOffset);
+
+    return bytes;
   }
 
   // ── VS Code message listener ──────────────────────────────────────────────
